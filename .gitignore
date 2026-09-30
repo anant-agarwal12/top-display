@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+# Lyrics cache: rebuilt automatically, and lyrics belong to their rights holders
+cache/
+.arena/
+*.log
