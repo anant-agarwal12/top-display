@@ -4,4 +4,6 @@ __pycache__/
 # Lyrics cache: rebuilt automatically, and lyrics belong to their rights holders
 cache/
 .arena/
+build/
+dist/
 *.log

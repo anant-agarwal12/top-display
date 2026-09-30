@@ -1,5 +1,6 @@
 """Fetches synced lyrics from lrclib.net (free, no API key required)."""
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -8,8 +9,10 @@ from urllib.parse import quote
 
 import requests
 
-CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
-CACHE_DIR.mkdir(exist_ok=True)
+# Per-user data dir, not the install folder: an installed app's folder is
+# read-only and gets replaced on update, and the cache should survive that.
+CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "TopDisplayLyricsOverlay" / "cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 USER_AGENT = "TopDisplayLyricsOverlay/1.0 (personal desktop overlay)"
 BASE_URL = "https://lrclib.net/api"

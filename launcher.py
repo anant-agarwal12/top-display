@@ -17,6 +17,7 @@ sys.path.insert(0, str(BASE_DIR / "src"))
 
 from hotkey import GlobalHotkey, VK_P  # noqa: E402
 
+FROZEN = getattr(sys, "frozen", False)  # True inside the PyInstaller build
 _SCRIPTS_DIR = BASE_DIR / ".venv" / "Scripts"
 # pythonw has no console window, so the overlay can't be killed by closing one.
 VENV_PYTHON = _SCRIPTS_DIR / "pythonw.exe"
@@ -58,7 +59,7 @@ class AppLauncher:
     def start(self):
         if self.is_running():
             return
-        if not VENV_PYTHON.exists():
+        if not FROZEN and not VENV_PYTHON.exists():
             self.tray.showMessage(
                 "Top Display",
                 "Virtual env not found. Run: python -m venv .venv && "
@@ -73,8 +74,10 @@ class AppLauncher:
             log = open(LOG_FILE, "ab")
         except OSError:
             log = subprocess.DEVNULL
+        # Packaged app: run ourselves again in overlay mode (no venv exists).
+        command = [sys.executable, "--overlay"] if FROZEN else [str(VENV_PYTHON), str(MAIN_SCRIPT)]
         self.process = subprocess.Popen(
-            [str(VENV_PYTHON), str(MAIN_SCRIPT)], cwd=str(BASE_DIR),
+            command, cwd=str(BASE_DIR),
             stdout=log, stderr=log, creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if log is not subprocess.DEVNULL:

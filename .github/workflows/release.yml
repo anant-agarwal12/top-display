@@ -1,0 +1,52 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the Windows installer and attach it to a
+# draft GitHub Release (publish the draft by hand after checking it).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Install Inno Setup
+        run: |
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue) -and
+              -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Build installer
+        run: powershell -ExecutionPolicy Bypass -File packaging\build.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TopDisplay-Setup
+          path: |
+            dist/TopDisplay-Setup-*.exe
+            dist/TopDisplay-Setup-*.exe.sha256
+
+      - name: Attach to draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            dist/TopDisplay-Setup-*.exe
+            dist/TopDisplay-Setup-*.exe.sha256
