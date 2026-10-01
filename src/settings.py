@@ -10,10 +10,15 @@ _SETTINGS_FILE = _SETTINGS_DIR / "settings.json"
 
 DEFAULTS = {
     "bg_opacity": 0.55,   # 0.0 (fully transparent) - 1.0 (opaque)
-    "window_x": 100,
-    "window_y": 100,
+    # None = first run: the lyrics window is placed at the top-right of the
+    # primary screen, and the settings gear on its left edge, 30% from the top.
+    # A saved settings.json keeps whatever position the user already has.
+    "window_x": None,
+    "window_y": None,
     "window_w": 420,
     "window_h": 560,
+    "gear_x": None,
+    "gear_y": None,
 }
 
 

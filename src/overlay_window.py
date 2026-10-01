@@ -1,7 +1,6 @@
 """The transparent, always-on-top, scrollable lyrics overlay window."""
 import bisect
 import ctypes
-import html
 import time
 from typing import List, Optional, Tuple
 
@@ -10,17 +9,17 @@ from PySide6.QtCore import (
     QPoint, QRect, QEvent,
 )
 from PySide6.QtGui import (
-    QColor, QPainter, QPainterPath, QFont, QFontMetrics, QPen, QGuiApplication, QRegion, QPalette,
+    QBrush, QColor, QPainter, QPainterPath, QPen, QGuiApplication, QRegion, QPalette, QLinearGradient,
 )
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QSlider,
-    QPushButton, QSizeGrip, QSizePolicy,
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QSlider, QSizePolicy,
 )
 
 from media_session import fetch_now_playing, NowPlaying
 from lyrics_fetcher import fetch_lyrics
 import settings as settings_store
 import theme
+from gear_window import GearWindow
 
 
 POLL_INTERVAL_SEC = 1.0
@@ -163,11 +162,13 @@ class LyricsOverlay(QWidget):
         self.setMouseTracking(True)
 
         self.resize(self.cfg["window_w"], self.cfg["window_h"])
-        self.move(self.cfg["window_x"], self.cfg["window_y"])
+        window_pos, gear_pos = self._initial_positions()
+        self.move(window_pos)
+        self._clamp_to_screens()
 
         self.bg_opacity = self.cfg["bg_opacity"]
         self.edit_mode = False
-        self._resize_margin = 8
+        self._resize_margin = 10
         self._drag_state: Optional[dict] = None
         self._dimmer = ScreenDimmer()
         self._min_size = (160, 120)
@@ -177,6 +178,16 @@ class LyricsOverlay(QWidget):
         # register_interactive_window(widget) -- it does not need to touch
         # ScreenDimmer or know the dim layer exists at all.
         self._interactive_windows: List[QWidget] = [self]
+
+        # The floating settings gear + its pane live in their own window,
+        # shown only while unlocked. It is registered like any other
+        # interactive window so it stays clickable through the dim layer.
+        self.gear_window = GearWindow(gear_pos)
+        self.gear_window.clamp_to_screens()
+        self.gear_window.geometry_changed.connect(self._refresh_dim_mask)
+        self.gear_window.position_saved.connect(self._on_gear_moved)
+        self.gear_window.quit_requested.connect(self._quit_app)
+        self.register_interactive_window(self.gear_window)
 
         # A one-time SetWindowPos(HWND_TOPMOST) isn't sticky -- Windows can
         # let some other window reclaim the topmost band shortly afterwards
@@ -224,69 +235,23 @@ class LyricsOverlay(QWidget):
         root.setContentsMargins(10, 6, 10, 10)
         root.setSpacing(4)
 
-        self.title_bar = QWidget(self)
-        self.title_bar.setFixedHeight(32)
-        self.title_bar.setMouseTracking(True)
-        title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(4, 0, 4, 0)
-        title_layout.setSpacing(8)
-
-        # The title bar only exists while unlocked, so this chip is the
-        # always-visible "you are in edit mode" cue.
-        self.unlocked_chip = QLabel("UNLOCKED")
-        self.unlocked_chip.setStyleSheet(theme.CHIP_QSS)
-        self.unlocked_chip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        title_layout.addWidget(self.unlocked_chip)
-
-        self.track_label = QLabel("Waiting for Spotify...")
-        self.track_label.setStyleSheet("background: transparent;")
-        self.track_label.setFont(theme.make_font(9))
-        self.track_label.setTextFormat(Qt.RichText)
-        self.track_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        # Ignored so its (potentially long) unwrapped text can't force the
-        # whole window to stay wider than the user wants -- it'll just clip.
-        self.track_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.track_label.setMinimumWidth(0)
-        title_layout.addWidget(self.track_label, stretch=1)
-
-        self.opacity_slider = QSlider(Qt.Horizontal)
-        # Shrinks in a narrow window so the song title keeps some room.
-        self.opacity_slider.setMinimumWidth(48)
-        self.opacity_slider.setMaximumWidth(96)
+        # The opacity slider is the only control left on the lyrics window. It
+        # floats over the top edge instead of sitting in a layout row, so
+        # locking/unlocking never changes the lyrics viewport's height (which
+        # used to re-centre the current line every time).
+        self.opacity_slider = QSlider(Qt.Horizontal, self)
         self.opacity_slider.setStyleSheet(theme.SLIDER_QSS)
         self.opacity_slider.setToolTip("Background opacity")
         self.opacity_slider.setAccessibleName("Background opacity")
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(int(self.bg_opacity * 100))
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
-        title_layout.addWidget(self.opacity_slider)
-
-        self.hide_btn = QPushButton()
-        self.hide_btn.setIcon(theme.make_icon("minimize"))
-        self.hide_btn.setFixedSize(24, 24)
-        self.hide_btn.setToolTip("Hide the overlay (use the tray icon to bring it back)")
-        self.hide_btn.setAccessibleName("Hide overlay")
-        self.hide_btn.setCursor(Qt.PointingHandCursor)
-        self.hide_btn.clicked.connect(self.hide)
-        self._style_btn(self.hide_btn)
-        title_layout.addWidget(self.hide_btn)
-
-        self.close_btn = QPushButton()
-        self.close_btn.setIcon(theme.make_icon("close"))
-        self.close_btn.setFixedSize(24, 24)
-        self.close_btn.setToolTip("Quit Top Display")
-        self.close_btn.setAccessibleName("Quit Top Display")
-        self.close_btn.setCursor(Qt.PointingHandCursor)
-        self.close_btn.clicked.connect(self._quit_app)
-        self._style_btn(self.close_btn, theme.CLOSE_BUTTON_QSS)
-        title_layout.addWidget(self.close_btn)
-
-        root.addWidget(self.title_bar)
+        self._place_opacity_slider()
 
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self.scroll_area.setStyleSheet("background: transparent; border: none;" + theme.SCROLLBAR_QSS)
+        self.scroll_area.setStyleSheet("background: transparent; border: none;")
         self.scroll_area.viewport().setStyleSheet("background: transparent;")
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -308,25 +273,10 @@ class LyricsOverlay(QWidget):
         self.scroll_area.setWidget(self.lyrics_container)
         root.addWidget(self.scroll_area, stretch=1)
 
-        # Clicks on the title bar and the lyrics viewport target those child
-        # widgets directly, not this window -- filter their events so
-        # dragging/resizing still works from anywhere on the overlay.
-        self.title_bar.installEventFilter(self)
+        # Clicks on the lyrics viewport target that child widget directly, not
+        # this window -- filter its events so dragging/resizing still works
+        # from anywhere on the overlay (edges resize, the middle moves).
         self.scroll_area.viewport().installEventFilter(self)
-        self.track_label.installEventFilter(self)
-
-        self.grip_container = QWidget(self)
-        grip_row = QHBoxLayout(self.grip_container)
-        grip_row.setContentsMargins(4, 0, 0, 0)
-        self.lock_hint = QLabel("Ctrl+Alt+L to lock")
-        self.lock_hint.setStyleSheet(f"color: {theme.TEXT_MUTED}; background: transparent;")
-        self.lock_hint.setFont(theme.make_font(8))
-        self.lock_hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        grip_row.addWidget(self.lock_hint)
-        grip_row.addStretch(1)
-        self.size_grip = QSizeGrip(self.grip_container)
-        grip_row.addWidget(self.size_grip)
-        root.addWidget(self.grip_container)
 
         self._set_status_line("Waiting for Spotify...")
         self._apply_edit_mode_visuals()
@@ -353,9 +303,6 @@ class LyricsOverlay(QWidget):
         that settle first, so the very first scroll attempt lands correctly
         instead of silently waiting for some later trigger to fix it."""
         QTimer.singleShot(0, lambda idx=idx: self._scroll_to_line(idx))
-
-    def _style_btn(self, btn: QPushButton, qss: Optional[str] = None):
-        btn.setStyleSheet(qss or theme.button_qss())
 
     def _set_status_line(self, text: str, content: bool = False):
         """Shows a message in the lyrics area. `content=True` is for actual
@@ -408,12 +355,10 @@ class LyricsOverlay(QWidget):
         self._apply_edit_mode_visuals()
 
     def _apply_edit_mode_visuals(self):
-        self.title_bar.setVisible(self.edit_mode)
-        self.grip_container.setVisible(self.edit_mode)
-        self.scroll_area.setVerticalScrollBarPolicy(
-            Qt.ScrollBarAsNeeded if self.edit_mode else Qt.ScrollBarAlwaysOff
-        )
+        self.opacity_slider.setVisible(self.edit_mode)
         if self.edit_mode:
+            # Shown first so its rectangle gets a hole in the dim layer.
+            self.gear_window.show_for_edit()
             self._dimmer.show_all(self._exclude_rects())
             self.raise_()
             self.activateWindow()
@@ -422,15 +367,14 @@ class LyricsOverlay(QWidget):
         else:
             self._topmost_timer.stop()
             self._dimmer.hide_all()
+            self.gear_window.hide_for_lock()
             self._drag_state = None
             self.setCursor(Qt.ArrowCursor)
         self._update_track_label()
         self.update()
 
-        # Showing/hiding the title bar and grip changes the scroll area's
-        # available height without changing this window's own outer size, so
-        # it never fires resizeEvent -- nothing else would re-center the
-        # current line after a lock/unlock without this.
+        # Nothing here changes the lyrics viewport's size any more, but this
+        # keeps the current line centred if anything ever does.
         self._update_dynamic_padding()
         if 0 <= self._active_index < len(self.line_labels):
             self._scroll_to_line_deferred(self._active_index)
@@ -443,34 +387,11 @@ class LyricsOverlay(QWidget):
                 _pin_topmost(widget)
 
     def _update_track_label(self):
-        """Song title in white, artist in slate, each trimmed with an ellipsis
-        to the room the title bar leaves (the title keeps priority)."""
-        muted = f"color:{theme.TEXT_MUTED};"
+        """The song title/artist live in the settings pane, not on the window."""
         if self.now_playing is None:
-            self.track_label.setText(f"<span style='{muted}'>Nothing playing on Spotify</span>")
-            return
-        title, artist = self.now_playing.title, self.now_playing.artist
-        room = self.track_label.width()
-        if 0 < room < 56:  # too narrow for even a clipped title: show nothing rather than "C..."
-            self.track_label.setText("")
-            return
-        if room <= 0:  # not laid out yet
-            self.track_label.setText(
-                f"<span style='color:{theme.TEXT};font-weight:600'>{html.escape(title)}</span>"
-                f"&nbsp;&nbsp;<span style='{muted}'>{html.escape(artist)}</span>"
-            )
-            return
-        bold = QFont(self.track_label.font())
-        bold.setWeight(QFont.DemiBold)
-        title_fm, artist_fm = QFontMetrics(bold), QFontMetrics(self.track_label.font())
-        gap = 10
-        shown_title = title_fm.elidedText(title, Qt.ElideRight, room)
-        left = room - title_fm.horizontalAdvance(shown_title) - gap
-        shown_artist = artist_fm.elidedText(artist, Qt.ElideRight, left) if left > 24 and artist else ""
-        parts = f"<span style='color:{theme.TEXT};font-weight:600'>{html.escape(shown_title)}</span>"
-        if shown_artist:
-            parts += f"&nbsp;&nbsp;<span style='{muted}'>{html.escape(shown_artist)}</span>"
-        self.track_label.setText(parts)
+            self.gear_window.set_now_playing(None, None)
+        else:
+            self.gear_window.set_now_playing(self.now_playing.title, self.now_playing.artist)
 
     def _edge_at(self, pos: QPoint):
         margin = self._resize_margin
@@ -563,10 +484,7 @@ class LyricsOverlay(QWidget):
         return had_drag
 
     def eventFilter(self, obj, event):
-        if obj is self.track_label and event.type() == QEvent.Resize:
-            self._update_track_label()
-            return False
-        if obj in (self.title_bar, self.scroll_area.viewport()):
+        if obj is self.scroll_area.viewport():
             if event.type() == QEvent.MouseButtonPress:
                 if self._begin_interaction(event):
                     return True
@@ -592,7 +510,7 @@ class LyricsOverlay(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.size_grip.raise_()
+        self._place_opacity_slider()
         self._update_dynamic_padding()
 
     def moveEvent(self, event):
@@ -625,15 +543,26 @@ class LyricsOverlay(QWidget):
 
         opacity = max(0.0, min(1.0, self.bg_opacity))
         painter.fillPath(path, QColor(*theme.PANEL_RGB, int(opacity * 255)))
+        if opacity > 0.05:
+            # "Glass" is a surface treatment, not a blur (Windows will not blur
+            # behind a see-through Qt window): light falling from the top
+            # edge, and a rim that is brighter on top and fades towards the
+            # bottom. Both scale with the tint, so opacity 0 is still text-only.
+            sheen = QLinearGradient(0, 0, 0, self.height() * 0.45)
+            sheen.setColorAt(0.0, QColor(255, 255, 255, int(34 * opacity)))
+            sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+            painter.fillPath(path, sheen)
         if self.edit_mode:
             edge = QColor(theme.ACCENT_UNLOCKED)
             edge.setAlpha(230)
             painter.setPen(QPen(edge, 2))
             painter.drawPath(path)
         elif opacity > 0.05:
-            # A faint rim so the panel reads as a surface on any wallpaper;
-            # it fades out together with the background.
-            painter.setPen(QPen(QColor(255, 255, 255, int(28 * opacity)), 1))
+            rim = QLinearGradient(0, 0, 0, self.height())
+            rim.setColorAt(0.0, QColor(255, 255, 255, int(88 * opacity)))
+            rim.setColorAt(0.5, QColor(255, 255, 255, int(26 * opacity)))
+            rim.setColorAt(1.0, QColor(255, 255, 255, int(46 * opacity)))
+            painter.setPen(QPen(QBrush(rim), 1))
             painter.drawPath(path)
 
     def _on_opacity_changed(self, value: int):
@@ -641,6 +570,47 @@ class LyricsOverlay(QWidget):
         self.cfg["bg_opacity"] = self.bg_opacity
         settings_store.save_settings(self.cfg)
         self.update()
+
+    def _place_opacity_slider(self):
+        self.opacity_slider.setGeometry(18, 12, max(40, self.width() - 36), 18)
+        self.opacity_slider.raise_()
+
+    def _on_gear_moved(self, x: int, y: int):
+        self.cfg["gear_x"], self.cfg["gear_y"] = x, y
+        settings_store.save_settings(self.cfg)
+
+    # ---------- first-run placement ----------
+    def _initial_positions(self):
+        """Saved positions win. On a first run the lyrics window sits at the
+        top-right of the primary screen and the gear on its left edge, 30% of
+        the way down (i.e. 70% of the screen height above the bottom)."""
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+
+        def saved(key):
+            value = self.cfg.get(key)
+            return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+        wx, wy = saved("window_x"), saved("window_y")
+        gx, gy = saved("gear_x"), saved("gear_y")
+        if wx is None or wy is None:
+            wx, wy = avail.right() + 1 - self.width() - 24, avail.top() + 24
+        if gx is None or gy is None:
+            gx, gy = avail.left() + 24, avail.top() + int(avail.height() * 0.30)
+        return QPoint(wx, wy), QPoint(gx, gy)
+
+    def _clamp_to_screens(self):
+        """A saved position on a monitor that is no longer connected would
+        leave the overlay unreachable; pull it back onto a real screen."""
+        geo = self.geometry()
+        for screen in QGuiApplication.screens():
+            visible = screen.availableGeometry().intersected(geo)
+            if visible.width() >= 80 and visible.height() >= 40:
+                return
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        self.setGeometry(
+            avail.x() + 40, avail.y() + 40,
+            min(geo.width(), avail.width() - 80), min(geo.height(), avail.height() - 80),
+        )
 
     def _on_manual_scroll(self):
         if self._programmatic_scroll:

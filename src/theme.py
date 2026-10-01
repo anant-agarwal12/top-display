@@ -9,15 +9,14 @@ secondary text, green kept as the product accent and a blue accent reserved for
 import ctypes
 from typing import Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, QRectF
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QTransform
 
 # ---------- colour tokens ----------
 PANEL_RGB = (13, 13, 24)            # window background (alpha comes from the opacity slider)
 TEXT = "#F8FAFC"                    # primary text / current lyric line
 TEXT_MUTED = "#94A3B8"              # secondary text (artist, hints), 6.9:1 on the panel
 ACCENT_UNLOCKED = "#60A5FA"         # border, chip and slider fill while unlocked
-DESTRUCTIVE = "#EF4444"             # close button hover
 
 # ---------- type ----------
 # System fonts only: nothing to bundle, and Segoe UI's fallback chain covers
@@ -74,52 +73,24 @@ def motion_ms(duration_ms: int) -> int:
     return duration_ms if animations_enabled() else 0
 
 
-# ---------- icons (drawn, not font glyphs, so they stay crisp and centred) ----------
-def make_icon(kind: str, normal: str = TEXT_MUTED, active: str = TEXT) -> QIcon:
-    icon = QIcon()
-    for mode, color in ((QIcon.Normal, normal), (QIcon.Active, active)):
-        icon.addPixmap(_draw_icon(kind, color), mode)
-    return icon
-
-
-def _draw_icon(kind: str, color: str) -> QPixmap:
-    scale = 2                       # drawn at 2x so it stays sharp on high-DPI screens
-    size = 14
-    pixmap = QPixmap(size * scale, size * scale)
-    pixmap.setDevicePixelRatio(scale)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color), 1.6)
-    pen.setCapStyle(Qt.RoundCap)
-    painter.setPen(pen)
-    if kind == "minimize":
-        painter.drawLine(3, 10, 11, 10)
-    elif kind == "close":
-        painter.drawLine(3, 3, 11, 11)
-        painter.drawLine(11, 3, 3, 11)
-    painter.end()
-    return pixmap
+def draw_gear(painter: QPainter, cx: float, cy: float, radius: float, color: QColor, teeth: int = 8):
+    """A cog: round body, `teeth` rounded teeth, and a hole in the middle."""
+    body = QPainterPath()
+    body.addEllipse(QRectF(cx - radius * 0.68, cy - radius * 0.68, radius * 1.36, radius * 1.36))
+    tooth_w = radius * 0.46
+    for i in range(teeth):
+        tooth = QPainterPath()
+        tooth.addRoundedRect(QRectF(-tooth_w / 2, -radius, tooth_w, radius * 0.62), tooth_w * 0.25, tooth_w * 0.25)
+        rotate = QTransform().translate(cx, cy).rotate(360.0 * i / teeth)
+        body = body.united(rotate.map(tooth))
+    hole = QPainterPath()
+    hole.addEllipse(QRectF(cx - radius * 0.3, cy - radius * 0.3, radius * 0.6, radius * 0.6))
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color)
+    painter.drawPath(body.subtracted(hole))
 
 
 # ---------- stylesheets ----------
-def button_qss(hover_bg: str = "rgba(255,255,255,40)") -> str:
-    return (
-        "QPushButton { background: transparent; border: 1px solid transparent; border-radius: 6px; }"
-        f"QPushButton:hover {{ background: {hover_bg}; }}"
-        "QPushButton:pressed { background: rgba(255,255,255,24); }"
-        f"QPushButton:focus {{ border: 1px solid {ACCENT_UNLOCKED}; }}"
-    )
-
-
-CLOSE_BUTTON_QSS = button_qss("rgba(239,68,68,200)")
-
-CHIP_QSS = (
-    f"QLabel {{ color: {ACCENT_UNLOCKED}; background: rgba(96,165,250,36);"
-    f" border: 1px solid rgba(96,165,250,110); border-radius: 8px;"
-    f" padding: 1px 7px; font-size: 8pt; font-weight: 600; letter-spacing: 1px; }}"
-)
-
 SLIDER_QSS = (
     "QSlider::groove:horizontal { height: 4px; background: rgba(255,255,255,45); border-radius: 2px; }"
     f"QSlider::sub-page:horizontal {{ background: {ACCENT_UNLOCKED}; border-radius: 2px; }}"
@@ -127,12 +98,4 @@ SLIDER_QSS = (
     " margin: -4px 0; border-radius: 6px; border: 1px solid transparent; }"
     "QSlider::handle:horizontal:hover { background: white; }"
     f"QSlider::handle:horizontal:focus {{ border: 2px solid {ACCENT_UNLOCKED}; }}"
-)
-
-SCROLLBAR_QSS = (
-    "QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }"
-    "QScrollBar::handle:vertical { background: rgba(255,255,255,70); border-radius: 3px; min-height: 24px; }"
-    "QScrollBar::handle:vertical:hover { background: rgba(255,255,255,130); }"
-    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-    "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
 )
