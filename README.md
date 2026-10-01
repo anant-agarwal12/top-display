@@ -49,7 +49,7 @@ python -m venv .venv
 winget install JRSoftware.InnoSetup
 powershell -ExecutionPolicy Bypass -File packaging\build.ps1   # -> dist\TopDisplay-Setup-<version>.exe
 ```
-Pushing a tag like `v0.1.0` builds it on GitHub Actions and attaches it to a draft Release.
+The same build can be run on GitHub Actions (Actions tab -> Release -> Run workflow).
 
 ## Shortcuts
 | Keys | Action |

@@ -1,10 +1,10 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the Windows installer and attach it to a
-# draft GitHub Release (publish the draft by hand after checking it).
+# Run manually (Actions tab -> Release -> Run workflow) to build the Windows
+# installer and download it from the run's artifacts.
+# To build and attach it to a draft Release automatically on version tags,
+# add under `on:`:   push: { tags: ["v*"] }
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
