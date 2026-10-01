@@ -6,7 +6,6 @@ minimal and high-contrast, a near-black panel with a cool tint, slate for
 secondary text, green kept as the product accent and a blue accent reserved for
 "unlocked" (editing) chrome so the mode is obvious at a glance.
 """
-import ctypes
 from typing import Optional
 
 from PySide6.QtCore import Qt, QRectF
@@ -16,14 +15,14 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QTransform
 PANEL_RGB = (13, 13, 24)            # window background (alpha comes from the opacity slider)
 TEXT = "#F8FAFC"                    # primary text / current lyric line
 TEXT_MUTED = "#94A3B8"              # secondary text (artist, hints), 6.9:1 on the panel
-ACCENT_UNLOCKED = "#60A5FA"         # border, chip and slider fill while unlocked
+ACCENT_UNLOCKED = "#60A5FA"         # border and slider fill while unlocked
+ACCENT_SING = "#22C55E"             # karaoke sweep: the "sung" colour
 
 # ---------- type ----------
 # System fonts only: nothing to bundle, and Segoe UI's fallback chain covers
 # Devanagari and other scripts the song list contains.
 _FAMILIES = ["Segoe UI Variable Text", "Segoe UI"]
-LINE_SIZE = 15
-ACTIVE_LINE_SIZE = 20
+LINE_SIZE = 16          # resting size of every lyric line; the current line is *painted* larger
 
 
 def make_font(point_size: float, weight: QFont.Weight = QFont.Normal) -> QFont:
@@ -34,43 +33,14 @@ def make_font(point_size: float, weight: QFont.Weight = QFont.Normal) -> QFont:
     return font
 
 
-def line_font(active: bool) -> QFont:
-    return make_font(ACTIVE_LINE_SIZE, QFont.DemiBold) if active else make_font(LINE_SIZE)
-
-
-# ---------- lyric emphasis ----------
-_NEAR_ALPHA = 0.72      # the line right next to the current one
-_ALPHA_STEP = 0.06      # how fast lines fade with distance
-_ALPHA_FLOOR = 0.40     # far lines stay readable (about 3.9:1), never vanish
-FADE_RANGE = 8          # lines further than this from the active one are already at the floor
-
-
-def line_alpha(distance: int) -> float:
-    if distance <= 0:
-        return 1.0
-    return max(_ALPHA_FLOOR, _NEAR_ALPHA - _ALPHA_STEP * (distance - 1))
+def lyric_font() -> QFont:
+    return make_font(LINE_SIZE, QFont.Medium)
 
 
 def text_color(alpha: float) -> QColor:
     color = QColor(TEXT)
     color.setAlphaF(max(0.0, min(1.0, alpha)))
     return color
-
-
-# ---------- motion ----------
-def animations_enabled() -> bool:
-    """Honours Windows' "Animation effects" setting (the desktop equivalent of
-    prefers-reduced-motion). Falls back to enabled if it can't be read."""
-    flag = ctypes.c_int(1)
-    try:
-        ok = ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(flag), 0)  # SPI_GETCLIENTAREAANIMATION
-    except Exception:
-        return True
-    return bool(flag.value) if ok else True
-
-
-def motion_ms(duration_ms: int) -> int:
-    return duration_ms if animations_enabled() else 0
 
 
 def draw_gear(painter: QPainter, cx: float, cy: float, radius: float, color: QColor, teeth: int = 8):

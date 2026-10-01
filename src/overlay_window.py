@@ -9,7 +9,7 @@ from PySide6.QtCore import (
     QPoint, QRect, QEvent,
 )
 from PySide6.QtGui import (
-    QBrush, QColor, QPainter, QPainterPath, QPen, QGuiApplication, QRegion, QPalette, QLinearGradient,
+    QBrush, QColor, QPainter, QPainterPath, QPen, QGuiApplication, QRegion, QLinearGradient,
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QSlider, QSizePolicy,
@@ -19,11 +19,14 @@ from media_session import fetch_now_playing, NowPlaying
 from lyrics_fetcher import fetch_lyrics
 import settings as settings_store
 import theme
+import lyric_styles
+from lyric_label import LyricLabel
 from gear_window import GearWindow
 
 
 POLL_INTERVAL_SEC = 1.0
-TICK_MS = 33
+TICK_MS = 16   # ~60 fps: the karaoke sweep and typewriter progress are driven from this tick
+FADE_RANGE = 9  # lines further than this from the current one are already at their resting look
 AUTO_FOLLOW_PAUSE_SEC = 4.0
 # Backoff between retries when the lyrics server is unreachable; the last
 # value repeats until it recovers or the track changes.
@@ -207,9 +210,15 @@ class LyricsOverlay(QWidget):
         self._last_manual_scroll_time = 0.0
         self._active_index = -1
         self._last_shown_position: Optional[float] = None
-        self._line_alpha: List[float] = []      # current text alpha of each lyric line
-        self._styled_index = -1                # which line the styling currently treats as active
+        self._style = lyric_styles.get(self.cfg["animation"])   # see lyric_styles.py
+        self._timestamps: List[float] = []     # start time of every lyric line, for bisect
+        self._line_alpha: List[float] = []     # current text alpha of each lyric line
+        self._line_emph: List[float] = []      # current emphasis (0 resting .. 1 current) of each line
+        self._styled_index = -1                # which line the styling currently treats as current
         self._line_fade: Optional[QVariantAnimation] = None
+        self._fade_gen = 0                     # bumped whenever a fade is superseded
+        self._scroll_anim: Optional[QPropertyAnimation] = None
+        self._scroll_gen = 0
 
         self._build_ui()
 
@@ -267,7 +276,7 @@ class LyricsOverlay(QWidget):
         self.lyrics_container.setStyleSheet("background: transparent;")
         self.lyrics_container.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.lyrics_layout = QVBoxLayout(self.lyrics_container)
-        self.lyrics_layout.setSpacing(16)
+        self.lyrics_layout.setSpacing(10)
         self.lyrics_layout.setContentsMargins(6, 30, 6, 30)
 
         self.scroll_area.setWidget(self.lyrics_container)
@@ -285,13 +294,16 @@ class LyricsOverlay(QWidget):
         """Top/bottom padding scales with the available viewport height, so
         the amount of previous/next lyric context shown adapts to the
         window's current size instead of assuming a fixed amount of space,
-        while always leaving room to center the current line."""
-        viewport_h = self.scroll_area.viewport().height()
-        pad = max(24, viewport_h // 2)
+        while always leaving room to center the current line. The side
+        margins leave room for the current line to be painted larger without
+        touching the window edge."""
+        viewport = self.scroll_area.viewport()
+        pad = max(24, viewport.height() // 2)
+        side = 6
         margins = self.lyrics_layout.contentsMargins()
-        if margins.top() == pad:
+        if margins.top() == pad and margins.left() == side:
             return
-        self.lyrics_layout.setContentsMargins(6, pad, 6, pad)
+        self.lyrics_layout.setContentsMargins(side, pad, side, pad)
         if 0 <= self._active_index < len(self.line_labels):
             self._scroll_to_line_deferred(self._active_index)
 
@@ -715,22 +727,15 @@ class LyricsOverlay(QWidget):
         self._clear_lines()
         self.line_labels = []
         self._stop_line_fade()
-        for i, (_timestamp, text) in enumerate(self.synced_lines):
-            label = QLabel(text)
-            label.setAlignment(Qt.AlignCenter)
-            label.setWordWrap(True)
-            label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            label.setFont(theme.line_font(False))
+        self._timestamps = [t for t, _ in self.synced_lines]
+        for _timestamp, text in self.synced_lines:
+            label = LyricLabel(text)
+            label.configure(self._style["scale"], self._style["mode"], self._peak_scale())
             self.lyrics_layout.addWidget(label)
             self.line_labels.append(label)
-        # Colour lives in the palette, not a stylesheet: re-styling dozens of
-        # labels from a stylesheet every animation frame would be far costlier.
-        self._line_alpha = [theme.line_alpha(i + 1) for i in range(len(self.line_labels))]
-        for label, alpha in zip(self.line_labels, self._line_alpha):
-            self._set_label_alpha(label, alpha)
         self._styled_index = -1
         self._active_index = -1
+        self._apply_look(-1)
         self._update_dynamic_padding()
 
     # ---------- playback-synced scrolling ----------
@@ -750,8 +755,10 @@ class LyricsOverlay(QWidget):
                 position = self._last_shown_position
         self._last_shown_position = position
 
-        timestamps = [t for t, _ in self.synced_lines]
-        idx = bisect.bisect_right(timestamps, position) - 1
+        # The cue is moved slightly earlier by the style's lead, so that the
+        # highlight has finished arriving at the line's real timestamp instead
+        # of only starting to.
+        idx = bisect.bisect_right(self._timestamps, position + self._style["lead"]) - 1
         idx = max(0, min(idx, len(self.synced_lines) - 1))
 
         if idx != self._active_index:
@@ -760,83 +767,177 @@ class LyricsOverlay(QWidget):
             if self._auto_follow:
                 self._scroll_to_line(idx)
 
+        self._update_line_progress(idx, position)
+
         if not self._auto_follow and (time.time() - self._last_manual_scroll_time) > AUTO_FOLLOW_PAUSE_SEC:
             self._auto_follow = True
             self._scroll_to_line(self._active_index)
 
-    def _set_label_alpha(self, label: QLabel, alpha: float):
-        palette = label.palette()
-        palette.setColor(QPalette.WindowText, theme.text_color(alpha))
-        label.setPalette(palette)
+    def _update_line_progress(self, idx: int, position: float):
+        """Karaoke sweep / typewriter: how far through the current line we are."""
+        mode = self._style["mode"]
+        if mode == "none" or not (0 <= idx < len(self.line_labels)):
+            return
+        start = self._timestamps[idx]
+        gap = (self._timestamps[idx + 1] - start) if idx + 1 < len(self._timestamps) else 4.0
+        if mode == "sweep":
+            duration = min(max(0.6, gap) * 0.85, 7.0)      # finishes just before the next line
+        else:
+            chars = len(self.synced_lines[idx][1])
+            duration = min(max(0.6, chars * 0.045), max(0.6, gap) * 0.8)
+        self.line_labels[idx].set_progress((position - start) / duration)
+
+    # ---------- line looks ----------
+    def _look_for(self, i: int, current: int):
+        """(opacity, emphasis) a line should have when `current` is the current line."""
+        distance = i - current
+        if distance == 0:
+            return 1.0, 1.0
+        return lyric_styles.line_alpha(self._style, abs(distance), upcoming=distance > 0), 0.0
+
+    def _apply_look(self, current: int):
+        """Puts every line straight into the look for `current` (no animation)."""
+        self._stop_line_fade()
+        mode = self._style["mode"]
+        self._line_alpha, self._line_emph = [], []
+        for i, label in enumerate(self.line_labels):
+            alpha, emphasis = self._look_for(i, current if current >= 0 else -1)
+            self._line_alpha.append(alpha)
+            self._line_emph.append(emphasis)
+            label.set_look(emphasis, alpha)
+            label.set_progress(1.0 if (mode != "none" and i < current) else 0.0)
 
     def _stop_line_fade(self):
+        """Stops the running fade. Qt still fires `finished` on a stopped
+        animation, so each fade carries a generation number and a superseded
+        one's late signals are ignored (they would otherwise overwrite the new
+        line's look with stale values)."""
+        self._fade_gen += 1
         if self._line_fade is not None:
             self._line_fade.stop()
+            self._line_fade.deleteLater()
             self._line_fade = None
 
+    def _emphasis_curve(self) -> QEasingCurve:
+        curve = QEasingCurve(getattr(QEasingCurve, self._style["emph_ease"]))
+        if self._style["overshoot"] is not None:
+            curve.setOvershoot(self._style["overshoot"])
+        return curve
+
     def _highlight_active_line(self, idx: int):
-        """Fonts switch at once (they change the layout the scroll target is
-        measured against); colours cross-fade, so the highlight moves smoothly
-        instead of snapping."""
+        """Moves the emphasis from the old current line to the new one. Nothing
+        here changes any label's size in the layout (emphasis is painted), so
+        the list never jumps; only brightness and scale animate."""
         old = self._styled_index
         self._styled_index = idx
-        for i, label in enumerate(self.line_labels):
-            label.setFont(theme.line_font(i == idx))
+        mode = self._style["mode"]
+        if mode != "none":
+            for i, label in enumerate(self.line_labels):
+                if i != idx:
+                    label.set_progress(1.0 if i < idx else 0.0)
 
         targets = {}
         for i in range(len(self.line_labels)):
-            near = (i - idx) ** 2 <= theme.FADE_RANGE ** 2 or (i - old) ** 2 <= theme.FADE_RANGE ** 2
-            target = theme.line_alpha(abs(i - idx) if idx >= 0 else i + 1)
-            if near or abs(self._line_alpha[i] - target) > 0.005:
-                targets[i] = target
-        starts = {i: self._line_alpha[i] for i in targets}
+            alpha, emphasis = self._look_for(i, idx)
+            near = abs(i - idx) <= FADE_RANGE or (old >= 0 and abs(i - old) <= FADE_RANGE)
+            if near or abs(self._line_alpha[i] - alpha) > 0.005 or abs(self._line_emph[i] - emphasis) > 0.005:
+                targets[i] = (alpha, emphasis)
+        starts = {i: (self._line_alpha[i], self._line_emph[i]) for i in targets}
 
         self._stop_line_fade()
-        duration = theme.motion_ms(240)
+        duration = self._style["emph_ms"]
         if duration == 0:
-            for i, target in targets.items():
-                self._line_alpha[i] = target
-                self._set_label_alpha(self.line_labels[i], target)
+            for i, (alpha, emphasis) in targets.items():
+                self._line_alpha[i], self._line_emph[i] = alpha, emphasis
+                self.line_labels[i].set_look(emphasis, alpha)
             return
 
-        def step(t):
-            for i, target in targets.items():
-                alpha = starts[i] + (target - starts[i]) * t
-                self._line_alpha[i] = alpha
-                self._set_label_alpha(self.line_labels[i], alpha)
+        gen = self._fade_gen
+
+        def step(u):
+            if gen != self._fade_gen:
+                return
+            u = float(u)   # eased progress; an overshooting ease goes past 1.0 on purpose
+            for i, (alpha, emphasis) in targets.items():
+                a0, e0 = starts[i]
+                self._line_alpha[i] = a0 + (alpha - a0) * u
+                self._line_emph[i] = e0 + (emphasis - e0) * u
+                self.line_labels[i].set_look(self._line_emph[i], self._line_alpha[i])
+
+        def finish():
+            if gen != self._fade_gen:
+                return
+            for i, (alpha, emphasis) in targets.items():
+                self._line_alpha[i], self._line_emph[i] = alpha, emphasis
+                self.line_labels[i].set_look(emphasis, alpha)
 
         fade = QVariantAnimation(self)
         fade.setStartValue(0.0)
         fade.setEndValue(1.0)
         fade.setDuration(duration)
-        fade.setEasingCurve(QEasingCurve.OutCubic)
+        fade.setEasingCurve(self._emphasis_curve())
         fade.valueChanged.connect(step)
+        fade.finished.connect(finish)
         self._line_fade = fade
         fade.start()
+
+    def _peak_scale(self) -> float:
+        """Largest scale a line is painted at: an overshooting ease bounces ~30% past its target."""
+        return 1.0 + (self._style["scale"] - 1.0) * (1.35 if self._style["overshoot"] else 1.0)
+
+    def set_animation_style(self, key: str):
+        """Switch the lyric animation style while playing (from the settings pane)."""
+        key = lyric_styles.normalize(key)
+        self.cfg["animation"] = key
+        self._style = lyric_styles.get(key)
+        settings_store.save_settings(self.cfg)
+        for label in self.line_labels:
+            label.configure(self._style["scale"], self._style["mode"], self._peak_scale())
+        self._styled_index = self._active_index
+        self._apply_look(self._active_index)
+        if self._auto_follow and 0 <= self._active_index < len(self.line_labels):
+            self._scroll_to_line_deferred(self._active_index)
 
     def _scroll_to_line(self, idx: int):
         if idx < 0 or idx >= len(self.line_labels):
             return
         label = self.line_labels[idx]
 
-        # A font/style change (becoming the active line) or a resize can
-        # change how many lines this label wraps to. Force the layout to
-        # settle *now* so pos()/height() below reflect the new wrapped size
-        # instead of stale pre-change values -- otherwise a line that just
-        # grew to 2-3 lines gets mis-centered and its edges end up outside
-        # the visible viewport.
+        # Labels keep a fixed size in the layout, but a resize or new lyrics
+        # still change it. Force the layout to settle *now* so pos()/height()
+        # below are current, or the line ends up mis-centred.
         self.lyrics_container.updateGeometry()
         self.lyrics_layout.activate()
 
+        bar = self.scroll_area.verticalScrollBar()
         target_y = label.pos().y() + label.height() / 2 - self.scroll_area.viewport().height() / 2
-        target_y = max(0, min(target_y, self.scroll_area.verticalScrollBar().maximum()))
+        target_y = int(max(0, min(target_y, bar.maximum())))
+
+        self._scroll_gen += 1
+        if self._scroll_anim is not None:
+            self._scroll_anim.stop()
+            self._scroll_anim.deleteLater()
+            self._scroll_anim = None
+
+        duration = self._style["scroll_ms"]
+        if duration == 0:
+            self._programmatic_scroll = True
+            bar.setValue(target_y)
+            self._programmatic_scroll = False
+            return
 
         self._programmatic_scroll = True
-        anim = QPropertyAnimation(self.scroll_area.verticalScrollBar(), b"value", self)
-        anim.setDuration(theme.motion_ms(350))
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        anim.setStartValue(self.scroll_area.verticalScrollBar().value())
-        anim.setEndValue(int(target_y))
-        anim.finished.connect(lambda: setattr(self, "_programmatic_scroll", False))
+        anim = QPropertyAnimation(bar, b"value", self)
+        anim.setDuration(duration)
+        curve = QEasingCurve(getattr(QEasingCurve, self._style["scroll_ease"]))
+        if self._style["scroll_overshoot"] is not None:
+            curve.setOvershoot(self._style["scroll_overshoot"])
+        anim.setEasingCurve(curve)
+        anim.setStartValue(bar.value())
+        anim.setEndValue(target_y)
+        scroll_gen = self._scroll_gen
+        anim.finished.connect(
+            lambda: setattr(self, "_programmatic_scroll", False) if scroll_gen == self._scroll_gen else None
+        )
         anim.start()
         self._scroll_anim = anim
