@@ -19,6 +19,8 @@ from media_session import fetch_now_playing, NowPlaying
 from lyrics_fetcher import fetch_lyrics
 import settings as settings_store
 import theme
+import hotkey as hotkey_api
+import hotkey_spec
 import lyric_styles
 from lyric_label import LyricLabel
 from gear_window import GearWindow
@@ -185,10 +187,19 @@ class LyricsOverlay(QWidget):
         # The floating settings gear + its pane live in their own window,
         # shown only while unlocked. It is registered like any other
         # interactive window so it stays clickable through the dim layer.
-        self.gear_window = GearWindow(gear_pos)
+        self.lock_hotkey = None   # set by main.py: the live lock/unlock shortcut, so it can be rebound
+        self.gear_window = GearWindow(
+            gear_pos, self.cfg["animation"], self.cfg["hotkey_toggle"], self.cfg["hotkey_lock"],
+        )
         self.gear_window.clamp_to_screens()
         self.gear_window.geometry_changed.connect(self._refresh_dim_mask)
         self.gear_window.position_saved.connect(self._on_gear_moved)
+        self.gear_window.animation_changed.connect(self.set_animation_style)
+        self.gear_window.set_hotkey_handler(self._change_hotkey)
+        self.gear_window.reset_hotkeys_requested.connect(self._reset_hotkeys)
+        # A dropdown's list is its own window; keep it above the dim layer while it is open.
+        self.gear_window.popup_opened.connect(self.register_interactive_window)
+        self.gear_window.popup_closed.connect(self.unregister_interactive_window)
         self.gear_window.quit_requested.connect(self._quit_app)
         self.register_interactive_window(self.gear_window)
 
@@ -586,6 +597,46 @@ class LyricsOverlay(QWidget):
     def _place_opacity_slider(self):
         self.opacity_slider.setGeometry(18, 12, max(40, self.width() - 36), 18)
         self.opacity_slider.raise_()
+
+    # ---------- keyboard shortcuts (edited in the settings pane) ----------
+    def _change_hotkey(self, kind: str, combo: str) -> str:
+        """Apply a new shortcut. Returns "" on success, else a short reason it was refused.
+
+        The lock/unlock shortcut belongs to this process and is rebound live. The
+        start/stop shortcut belongs to the tray launcher (another process), so it
+        is only checked for availability here and saved; the launcher notices the
+        settings file change and rebinds itself.
+        """
+        combo = hotkey_spec.normalize(combo)
+        if combo is None:
+            return "That shortcut isn't allowed."
+        key, other = ("hotkey_toggle", "hotkey_lock") if kind == "toggle" else ("hotkey_lock", "hotkey_toggle")
+        if combo == self.cfg[key]:
+            return ""
+        if combo == self.cfg[other]:
+            return "That's already the other shortcut."
+        modifiers, vk = hotkey_spec.to_win32(combo)
+        if kind == "lock":
+            if self.lock_hotkey is not None and not self.lock_hotkey.rebind(modifiers, vk):
+                return "Another program already uses that shortcut."
+        elif not hotkey_api.is_available(modifiers, vk):
+            return "Another program already uses that shortcut."
+        self.cfg[key] = combo
+        settings_store.save_settings(self.cfg)
+        return ""
+
+    def _reset_hotkeys(self):
+        errors = [
+            error for error in (
+                self._change_hotkey("lock", hotkey_spec.DEFAULT_LOCK),
+                self._change_hotkey("toggle", hotkey_spec.DEFAULT_TOGGLE),
+            ) if error
+        ]
+        self.gear_window.set_hotkeys(self.cfg["hotkey_toggle"], self.cfg["hotkey_lock"])
+        if errors:
+            self.gear_window.show_message("Couldn't reset everything: " + errors[0].lower())
+        else:
+            self.gear_window.show_message("Shortcuts reset.", error=False)
 
     def _on_gear_moved(self, x: int, y: int):
         self.cfg["gear_x"], self.cfg["gear_y"] = x, y

@@ -4,22 +4,45 @@ One top-level window holds both, so the pane is attached to the gear by
 construction: there is a single position, a single drag, and a single hole in
 the screen-dim layer. The window is only the size of the gear while the pane is
 closed, and grows to include the pane (on whichever side has room) when open.
-"""
-from typing import Optional
 
-from PySide6.QtCore import Qt, QPoint, QRect, QRectF, QSize, Signal
+The pane edits: the lyric animation style, and the two keyboard shortcuts. It
+does not apply anything itself -- it reports changes through signals and a
+validator callback supplied by the overlay, which owns the real state.
+"""
+from typing import Callable, Optional
+
+from PySide6.QtCore import Qt, QPoint, QRect, QRectF, QSize, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
+import hotkey_spec
+import lyric_styles
 import theme
 
 GEAR_SIZE = 40
 GAP = 6                 # between the gear and the pane it opens
-PANE_WIDTH = 264
+PANE_WIDTH = 300
 DRAG_THRESHOLD = 4      # px of movement before a press counts as a drag, not a click
 _PANEL = theme.PANEL_RGB
+_ERROR_COLOR = "#F87171"
+
+_PANE_QSS = f"""
+QComboBox {{ color: {theme.TEXT}; background: rgba(255,255,255,18);
+    border: 1px solid rgba(255,255,255,36); border-radius: 7px;
+    padding: 3px 22px 3px 8px; min-height: 20px; }}
+QComboBox:hover {{ background: rgba(255,255,255,30); }}
+QComboBox:focus {{ border: 1px solid {theme.ACCENT_UNLOCKED}; }}
+QComboBox::drop-down {{ border: none; width: 20px; }}
+QComboBox QAbstractItemView {{ background: #14141f; color: {theme.TEXT};
+    border: 1px solid rgba(255,255,255,40); outline: 0; padding: 3px;
+    selection-background-color: rgba(96,165,250,90); selection-color: {theme.TEXT}; }}
+QPushButton#linkButton {{ color: {theme.TEXT_MUTED}; background: transparent; border: none;
+    padding: 2px 4px; text-align: right; }}
+QPushButton#linkButton:hover {{ color: {theme.TEXT}; }}
+QPushButton#linkButton:focus {{ color: {theme.TEXT}; border: 1px solid {theme.ACCENT_UNLOCKED}; border-radius: 4px; }}
+"""
 
 
 class _GearButton(QWidget):
@@ -109,6 +132,43 @@ class _GearButton(QWidget):
         )
 
 
+class _Combo(QComboBox):
+    """A dropdown whose popup list reports itself.
+
+    The popup is its own top-level window. While the screen is dimmed, the dim
+    layer would otherwise sit on top of it (it is re-pinned topmost every few
+    hundred ms) and swallow its clicks, so the overlay is told when it opens
+    and closes and keeps it above the dim layer like any other window of ours.
+    """
+    popup_shown = Signal(QWidget)
+    popup_hidden = Signal(QWidget)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMaxVisibleItems(9)
+
+    def showPopup(self):
+        super().showPopup()
+        self.popup_shown.emit(self.view().window())
+
+    def hidePopup(self):
+        self.popup_hidden.emit(self.view().window())
+        super().hidePopup()
+
+    def wheelEvent(self, event):
+        event.ignore()   # scrolling over the pane must not change a setting by accident
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor(theme.TEXT_MUTED), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        x, y = self.width() - 13.0, self.height() / 2.0
+        painter.drawPolyline([QPoint(int(x) - 3, int(y) - 1), QPoint(int(x), int(y) + 2), QPoint(int(x) + 3, int(y) - 1)])
+
+
 class _ElidedLabel(QLabel):
     """Single-line label that ends in an ellipsis instead of widening the pane."""
 
@@ -131,22 +191,76 @@ class _ElidedLabel(QLabel):
         self.setText(QFontMetrics(self.font()).elidedText(self._full, Qt.ElideRight, max(0, self.width())))
 
 
+class _HotkeyRow(QWidget):
+    """One shortcut: a modifier dropdown and a key dropdown (no key capture --
+    a registered shortcut never reaches a capture field, and pressing the
+    current start/stop shortcut would stop the app)."""
+    edited = Signal(str, str)          # kind, new canonical shortcut
+    popup_shown = Signal(QWidget)
+    popup_hidden = Signal(QWidget)
+
+    def __init__(self, kind: str, title: str, combo: str, parent=None):
+        super().__init__(parent)
+        self.kind = kind
+        self.committed = combo
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        label = QLabel(title)
+        label.setFont(theme.make_font(9.5))
+        label.setStyleSheet(f"color: {theme.TEXT};")
+        label.setFixedWidth(80)
+        row.addWidget(label)
+        self.mods = _Combo()
+        for mod in hotkey_spec.MODIFIER_SETS:
+            self.mods.addItem(mod.replace("+", " + "), mod)
+        self.keys = _Combo()
+        for key in hotkey_spec.KEYS:
+            self.keys.addItem(key, key)
+        self.keys.setFixedWidth(66)
+        for combo_box, name in ((self.mods, "modifier keys"), (self.keys, "key")):
+            combo_box.setAccessibleName(f"{title} shortcut, {name}")
+            combo_box.popup_shown.connect(self.popup_shown)
+            combo_box.popup_hidden.connect(self.popup_hidden)
+            combo_box.activated.connect(self._on_activated)
+        row.addWidget(self.mods, stretch=1)
+        row.addWidget(self.keys)
+        self.set_value(combo)
+
+    def value(self) -> str:
+        return hotkey_spec.join(self.mods.currentData(), self.keys.currentData())
+
+    def set_value(self, combo: str):
+        parts = hotkey_spec.split(combo) or hotkey_spec.split(hotkey_spec.DEFAULT_TOGGLE)
+        for box, data in ((self.mods, parts[0]), (self.keys, parts[1])):
+            box.blockSignals(True)
+            box.setCurrentIndex(max(0, box.findData(data)))
+            box.blockSignals(False)
+        self.committed = hotkey_spec.join(*parts)
+
+    def _on_activated(self, _index):
+        self.edited.emit(self.kind, self.value())
+
+
 class _Pane(QFrame):
+    animation_changed = Signal(str)
+    reset_hotkeys_requested = Signal()
+    popup_shown = Signal(QWidget)
+    popup_hidden = Signal(QWidget)
     quit_requested = Signal()
 
-    def __init__(self, parent):
+    def __init__(self, parent, animation_key: str, toggle_combo: str, lock_combo: str):
         super().__init__(parent)
         self.setObjectName("settingsPane")
         self.setFixedWidth(PANE_WIDTH)
+        self.setStyleSheet(_PANE_QSS)
+        self._hotkey_handler: Optional[Callable[[str, str], str]] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(0)
 
-        caption = QLabel("NOW PLAYING")
-        caption.setFont(theme.make_font(7.5, theme.QFont.DemiBold))
-        caption.setStyleSheet(f"color: {theme.TEXT_MUTED}; letter-spacing: 1.5px;")
-        layout.addWidget(caption)
+        layout.addWidget(self._caption("NOW PLAYING"))
         layout.addSpacing(6)
         self.title = _ElidedLabel()
         self.title.setFont(theme.make_font(11.5, theme.QFont.DemiBold))
@@ -162,22 +276,83 @@ class _Pane(QFrame):
         layout.addWidget(self._divider())
         layout.addSpacing(12)
 
-        layout.addLayout(self._shortcut("Ctrl+Alt+P", "Start / stop"))
-        layout.addSpacing(8)
-        layout.addLayout(self._shortcut("Ctrl+Alt+L", "Lock / unlock"))
+        layout.addWidget(self._caption("LYRIC ANIMATION"))
+        layout.addSpacing(6)
+        self.style_box = _Combo()
+        for key, style in lyric_styles.STYLES.items():
+            self.style_box.addItem(style["label"], key)
+        self.style_box.setAccessibleName("Lyric animation style")
+        self.style_box.setCurrentIndex(max(0, self.style_box.findData(lyric_styles.normalize(animation_key))))
+        self.style_box.popup_shown.connect(self.popup_shown)
+        self.style_box.popup_hidden.connect(self.popup_hidden)
+        self.style_box.activated.connect(self._on_style_activated)
+        layout.addWidget(self.style_box)
+        layout.addSpacing(6)
+        self.style_hint = QLabel()
+        self.style_hint.setWordWrap(True)
+        self.style_hint.setFont(theme.make_font(8.5))
+        self.style_hint.setStyleSheet(f"color: {theme.TEXT_MUTED};")
+        self.style_hint.setFixedHeight(32)   # two lines, so the pane never changes height
+        self.style_hint.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        layout.addWidget(self.style_hint)
+        self._update_style_hint()
 
-        layout.addSpacing(14)
+        layout.addSpacing(10)
+        layout.addWidget(self._divider())
+        layout.addSpacing(12)
+
+        layout.addWidget(self._caption("SHORTCUTS"))
+        layout.addSpacing(8)
+        self.toggle_row = _HotkeyRow("toggle", "Start / stop", toggle_combo)
+        self.lock_row = _HotkeyRow("lock", "Lock / unlock", lock_combo)
+        for row in (self.toggle_row, self.lock_row):
+            row.edited.connect(self._on_hotkey_edited)
+            row.popup_shown.connect(self.popup_shown)
+            row.popup_hidden.connect(self.popup_hidden)
+        layout.addWidget(self.toggle_row)
+        layout.addSpacing(8)
+        layout.addWidget(self.lock_row)
+        layout.addSpacing(6)
+
+        footer = QHBoxLayout()
+        self.message = QLabel()
+        self.message.setFont(theme.make_font(8.5))
+        self.message.setWordWrap(True)
+        self.message.setFixedHeight(32)
+        self.message.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        footer.addWidget(self.message, stretch=1)
+        reset = QPushButton("Reset")
+        reset.setObjectName("linkButton")
+        reset.setCursor(Qt.PointingHandCursor)
+        reset.setFont(theme.make_font(8.5))
+        reset.setToolTip("Put both shortcuts back to Ctrl+Alt+P and Ctrl+Alt+L")
+        reset.clicked.connect(self.reset_hotkeys_requested)
+        footer.addWidget(reset, alignment=Qt.AlignTop)
+        layout.addLayout(footer)
+        self._message_timer = QTimer(self)
+        self._message_timer.setSingleShot(True)
+        self._message_timer.timeout.connect(lambda: self.message.setText(""))
+
+        layout.addSpacing(6)
         quit_btn = QPushButton("Quit Top Display")
         quit_btn.setCursor(Qt.PointingHandCursor)
         quit_btn.setFont(theme.make_font(9.5, theme.QFont.DemiBold))
         quit_btn.setStyleSheet(
             f"QPushButton {{ color: {theme.TEXT}; background: rgba(255,255,255,16);"
             " border: 1px solid rgba(255,255,255,34); border-radius: 8px; padding: 7px; }"
-            f"QPushButton:hover {{ background: rgba(239,68,68,210); border-color: transparent; }}"
+            "QPushButton:hover { background: rgba(239,68,68,210); border-color: transparent; }"
             f"QPushButton:focus {{ border: 1px solid {theme.ACCENT_UNLOCKED}; }}"
         )
         quit_btn.clicked.connect(self.quit_requested)
         layout.addWidget(quit_btn)
+
+    # ---------- small builders ----------
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setFont(theme.make_font(7.5, theme.QFont.DemiBold))
+        label.setStyleSheet(f"color: {theme.TEXT_MUTED}; letter-spacing: 1.5px;")
+        return label
 
     @staticmethod
     def _divider() -> QFrame:
@@ -186,23 +361,7 @@ class _Pane(QFrame):
         line.setStyleSheet("background: rgba(255,255,255,26);")
         return line
 
-    @staticmethod
-    def _shortcut(keys: str, action: str) -> QHBoxLayout:
-        row = QHBoxLayout()
-        chip = QLabel(keys)
-        chip.setFont(theme.make_font(8.5, theme.QFont.DemiBold))
-        chip.setStyleSheet(
-            f"color: {theme.TEXT}; background: rgba(255,255,255,20);"
-            " border: 1px solid rgba(255,255,255,36); border-radius: 5px; padding: 2px 7px;"
-        )
-        label = QLabel(action)
-        label.setFont(theme.make_font(9.5))
-        label.setStyleSheet(f"color: {theme.TEXT_MUTED};")
-        row.addWidget(chip)
-        row.addSpacing(10)
-        row.addWidget(label, stretch=1)
-        return row
-
+    # ---------- state ----------
     def set_now_playing(self, title: Optional[str], artist: Optional[str]):
         if title is None:
             self.title.set_full_text("Nothing playing")
@@ -210,6 +369,42 @@ class _Pane(QFrame):
         else:
             self.title.set_full_text(title)
             self.artist.set_full_text(artist or "")
+
+    def set_hotkey_handler(self, handler: Callable[[str, str], str]):
+        """handler(kind, combo) -> "" if applied, else a short reason it was refused."""
+        self._hotkey_handler = handler
+
+    def set_hotkeys(self, toggle: str, lock: str):
+        self.toggle_row.set_value(toggle)
+        self.lock_row.set_value(lock)
+
+    def show_message(self, text: str, error: bool = True):
+        color = _ERROR_COLOR if error else theme.TEXT_MUTED
+        self.message.setStyleSheet(f"color: {color};")
+        self.message.setText(text)
+        self._message_timer.start(7000)
+
+    def _update_style_hint(self):
+        key = self.style_box.currentData()
+        self.style_hint.setText(lyric_styles.get(key)["hint"])
+
+    def _on_style_activated(self, _index):
+        self._update_style_hint()
+        self.animation_changed.emit(self.style_box.currentData())
+
+    def _on_hotkey_edited(self, kind: str, combo: str):
+        row = self.toggle_row if kind == "toggle" else self.lock_row
+        error = self._hotkey_handler(kind, combo) if self._hotkey_handler else ""
+        if error:
+            row.set_value(row.committed)       # put the dropdowns back
+            self.show_message(error)
+        else:
+            row.committed = combo
+            self.show_message("Saved." if kind == "lock" else "Saved. Applies in a moment.", error=False)
+
+    # A click on the panel's empty space must not fall through to the overlay.
+    def mousePressEvent(self, event):
+        event.accept()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -225,9 +420,13 @@ class _Pane(QFrame):
 class GearWindow(QWidget):
     geometry_changed = Signal()          # moved or resized: the dim-layer hole must follow
     position_saved = Signal(int, int)    # gear's screen position, after a drag ends
+    animation_changed = Signal(str)
+    reset_hotkeys_requested = Signal()
+    popup_opened = Signal(QWidget)       # a dropdown list opened (it needs a hole in the dim layer)
+    popup_closed = Signal(QWidget)
     quit_requested = Signal()
 
-    def __init__(self, gear_pos: QPoint):
+    def __init__(self, gear_pos: QPoint, animation_key: str, toggle_combo: str, lock_combo: str):
         super().__init__()
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -238,12 +437,16 @@ class GearWindow(QWidget):
         self._open = False
 
         self.gear = _GearButton(self)
-        self.pane = _Pane(self)
+        self.pane = _Pane(self, animation_key, toggle_combo, lock_combo)
         self.pane.hide()
         self.gear.clicked.connect(self.toggle_pane)
         self.gear.drag_begin.connect(self._on_drag_begin)
         self.gear.drag_to.connect(self._on_drag_to)
         self.gear.drag_end.connect(self._on_drag_end)
+        self.pane.animation_changed.connect(self.animation_changed)
+        self.pane.reset_hotkeys_requested.connect(self.reset_hotkeys_requested)
+        self.pane.popup_shown.connect(self.popup_opened)
+        self.pane.popup_hidden.connect(self.popup_closed)
         self.pane.quit_requested.connect(self.quit_requested)
         self._relayout()
 
@@ -258,6 +461,15 @@ class GearWindow(QWidget):
 
     def set_now_playing(self, title: Optional[str], artist: Optional[str]):
         self.pane.set_now_playing(title, artist)
+
+    def set_hotkey_handler(self, handler: Callable[[str, str], str]):
+        self.pane.set_hotkey_handler(handler)
+
+    def set_hotkeys(self, toggle: str, lock: str):
+        self.pane.set_hotkeys(toggle, lock)
+
+    def show_message(self, text: str, error: bool = True):
+        self.pane.show_message(text, error)
 
     def show_for_edit(self):
         self._open = False
@@ -283,13 +495,17 @@ class GearWindow(QWidget):
         screen = QGuiApplication.screenAt(centre) or QGuiApplication.primaryScreen()
         return screen.availableGeometry()
 
+    def _pane_height(self) -> int:
+        layout = self.pane.layout()
+        return layout.totalHeightForWidth(PANE_WIDTH) if layout.hasHeightForWidth() else self.pane.sizeHint().height()
+
     def _relayout(self):
         if not self._open:
             self.setGeometry(QRect(self._gear_pos, QSize(GEAR_SIZE, GEAR_SIZE)))
             self.gear.move(0, 0)
             return
         avail = self._screen_rect()
-        pane_h = self.pane.sizeHint().height()
+        pane_h = self._pane_height()
         # Pane goes on the right of the gear unless it would run off the screen.
         room_right = avail.right() + 1 - (self._gear_pos.x() + GEAR_SIZE + GAP)
         on_right = room_right >= PANE_WIDTH
