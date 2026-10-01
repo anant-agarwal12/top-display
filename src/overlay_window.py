@@ -1,11 +1,17 @@
 """The transparent, always-on-top, scrollable lyrics overlay window."""
 import bisect
 import ctypes
+import html
 import time
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QRect, QEvent
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QFont, QPen, QGuiApplication, QRegion
+from PySide6.QtCore import (
+    Qt, QThread, Signal, QTimer, QPropertyAnimation, QVariantAnimation, QEasingCurve,
+    QPoint, QRect, QEvent,
+)
+from PySide6.QtGui import (
+    QColor, QPainter, QPainterPath, QFont, QFontMetrics, QPen, QGuiApplication, QRegion, QPalette,
+)
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea, QSlider,
     QPushButton, QSizeGrip, QSizePolicy,
@@ -14,6 +20,7 @@ from PySide6.QtWidgets import (
 from media_session import fetch_now_playing, NowPlaying
 from lyrics_fetcher import fetch_lyrics
 import settings as settings_store
+import theme
 
 
 POLL_INTERVAL_SEC = 1.0
@@ -189,6 +196,9 @@ class LyricsOverlay(QWidget):
         self._last_manual_scroll_time = 0.0
         self._active_index = -1
         self._last_shown_position: Optional[float] = None
+        self._line_alpha: List[float] = []      # current text alpha of each lyric line
+        self._styled_index = -1                # which line the styling currently treats as active
+        self._line_fade: Optional[QVariantAnimation] = None
 
         self._build_ui()
 
@@ -215,14 +225,23 @@ class LyricsOverlay(QWidget):
         root.setSpacing(4)
 
         self.title_bar = QWidget(self)
-        self.title_bar.setFixedHeight(30)
+        self.title_bar.setFixedHeight(32)
         self.title_bar.setMouseTracking(True)
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(4, 0, 4, 0)
+        title_layout.setSpacing(8)
+
+        # The title bar only exists while unlocked, so this chip is the
+        # always-visible "you are in edit mode" cue.
+        self.unlocked_chip = QLabel("UNLOCKED")
+        self.unlocked_chip.setStyleSheet(theme.CHIP_QSS)
+        self.unlocked_chip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        title_layout.addWidget(self.unlocked_chip)
 
         self.track_label = QLabel("Waiting for Spotify...")
-        self.track_label.setStyleSheet("color: rgba(255,255,255,180); background: transparent;")
-        self.track_label.setFont(QFont("Segoe UI", 9))
+        self.track_label.setStyleSheet("background: transparent;")
+        self.track_label.setFont(theme.make_font(9))
+        self.track_label.setTextFormat(Qt.RichText)
         self.track_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         # Ignored so its (potentially long) unwrapped text can't force the
         # whole window to stay wider than the user wants -- it'll just clip.
@@ -231,22 +250,35 @@ class LyricsOverlay(QWidget):
         title_layout.addWidget(self.track_label, stretch=1)
 
         self.opacity_slider = QSlider(Qt.Horizontal)
-        self.opacity_slider.setFixedWidth(90)
+        # Shrinks in a narrow window so the song title keeps some room.
+        self.opacity_slider.setMinimumWidth(48)
+        self.opacity_slider.setMaximumWidth(96)
+        self.opacity_slider.setStyleSheet(theme.SLIDER_QSS)
+        self.opacity_slider.setToolTip("Background opacity")
+        self.opacity_slider.setAccessibleName("Background opacity")
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(int(self.bg_opacity * 100))
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         title_layout.addWidget(self.opacity_slider)
 
-        self.hide_btn = QPushButton("_")
-        self.hide_btn.setFixedSize(22, 22)
+        self.hide_btn = QPushButton()
+        self.hide_btn.setIcon(theme.make_icon("minimize"))
+        self.hide_btn.setFixedSize(24, 24)
+        self.hide_btn.setToolTip("Hide the overlay (use the tray icon to bring it back)")
+        self.hide_btn.setAccessibleName("Hide overlay")
+        self.hide_btn.setCursor(Qt.PointingHandCursor)
         self.hide_btn.clicked.connect(self.hide)
         self._style_btn(self.hide_btn)
         title_layout.addWidget(self.hide_btn)
 
-        self.close_btn = QPushButton("x")
-        self.close_btn.setFixedSize(22, 22)
+        self.close_btn = QPushButton()
+        self.close_btn.setIcon(theme.make_icon("close"))
+        self.close_btn.setFixedSize(24, 24)
+        self.close_btn.setToolTip("Quit Top Display")
+        self.close_btn.setAccessibleName("Quit Top Display")
+        self.close_btn.setCursor(Qt.PointingHandCursor)
         self.close_btn.clicked.connect(self._quit_app)
-        self._style_btn(self.close_btn)
+        self._style_btn(self.close_btn, theme.CLOSE_BUTTON_QSS)
         title_layout.addWidget(self.close_btn)
 
         root.addWidget(self.title_bar)
@@ -254,7 +286,7 @@ class LyricsOverlay(QWidget):
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QScrollArea.NoFrame)
-        self.scroll_area.setStyleSheet("background: transparent; border: none;")
+        self.scroll_area.setStyleSheet("background: transparent; border: none;" + theme.SCROLLBAR_QSS)
         self.scroll_area.viewport().setStyleSheet("background: transparent;")
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -270,7 +302,7 @@ class LyricsOverlay(QWidget):
         self.lyrics_container.setStyleSheet("background: transparent;")
         self.lyrics_container.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.lyrics_layout = QVBoxLayout(self.lyrics_container)
-        self.lyrics_layout.setSpacing(14)
+        self.lyrics_layout.setSpacing(16)
         self.lyrics_layout.setContentsMargins(6, 30, 6, 30)
 
         self.scroll_area.setWidget(self.lyrics_container)
@@ -281,10 +313,16 @@ class LyricsOverlay(QWidget):
         # dragging/resizing still works from anywhere on the overlay.
         self.title_bar.installEventFilter(self)
         self.scroll_area.viewport().installEventFilter(self)
+        self.track_label.installEventFilter(self)
 
         self.grip_container = QWidget(self)
         grip_row = QHBoxLayout(self.grip_container)
-        grip_row.setContentsMargins(0, 0, 0, 0)
+        grip_row.setContentsMargins(4, 0, 0, 0)
+        self.lock_hint = QLabel("Ctrl+Alt+L to lock")
+        self.lock_hint.setStyleSheet(f"color: {theme.TEXT_MUTED}; background: transparent;")
+        self.lock_hint.setFont(theme.make_font(8))
+        self.lock_hint.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        grip_row.addWidget(self.lock_hint)
         grip_row.addStretch(1)
         self.size_grip = QSizeGrip(self.grip_container)
         grip_row.addWidget(self.size_grip)
@@ -316,18 +354,19 @@ class LyricsOverlay(QWidget):
         instead of silently waiting for some later trigger to fix it."""
         QTimer.singleShot(0, lambda idx=idx: self._scroll_to_line(idx))
 
-    def _style_btn(self, btn: QPushButton):
-        btn.setStyleSheet(
-            "QPushButton { color: white; background: rgba(255,255,255,30); border: none; border-radius: 4px; }"
-            "QPushButton:hover { background: rgba(255,255,255,70); }"
-        )
+    def _style_btn(self, btn: QPushButton, qss: Optional[str] = None):
+        btn.setStyleSheet(qss or theme.button_qss())
 
-    def _set_status_line(self, text: str):
+    def _set_status_line(self, text: str, content: bool = False):
+        """Shows a message in the lyrics area. `content=True` is for actual
+        (plain, unsynced) lyrics, which should read brighter than a status
+        message like "Loading lyrics...". """
         self._clear_lines()
         label = QLabel(text)
         label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet("color: rgba(255,255,255,160); background: transparent;")
-        label.setFont(QFont("Segoe UI", 13))
+        color = "rgba(248,250,252,215)" if content else theme.TEXT_MUTED
+        label.setStyleSheet(f"color: {color}; background: transparent;")
+        label.setFont(theme.make_font(14))
         label.setWordWrap(True)
         label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -404,16 +443,34 @@ class LyricsOverlay(QWidget):
                 _pin_topmost(widget)
 
     def _update_track_label(self):
+        """Song title in white, artist in slate, each trimmed with an ellipsis
+        to the room the title bar leaves (the title keeps priority)."""
+        muted = f"color:{theme.TEXT_MUTED};"
         if self.now_playing is None:
-            base = "Nothing playing on Spotify"
-        else:
-            base = f"{self.now_playing.artist} - {self.now_playing.title}"
-        if self.edit_mode:
-            base += "   [UNLOCKED - drag / resize, Ctrl+Alt+L to lock]"
-            self.track_label.setStyleSheet("color: rgb(140,200,255); background: transparent;")
-        else:
-            self.track_label.setStyleSheet("color: rgba(255,255,255,180); background: transparent;")
-        self.track_label.setText(base)
+            self.track_label.setText(f"<span style='{muted}'>Nothing playing on Spotify</span>")
+            return
+        title, artist = self.now_playing.title, self.now_playing.artist
+        room = self.track_label.width()
+        if 0 < room < 56:  # too narrow for even a clipped title: show nothing rather than "C..."
+            self.track_label.setText("")
+            return
+        if room <= 0:  # not laid out yet
+            self.track_label.setText(
+                f"<span style='color:{theme.TEXT};font-weight:600'>{html.escape(title)}</span>"
+                f"&nbsp;&nbsp;<span style='{muted}'>{html.escape(artist)}</span>"
+            )
+            return
+        bold = QFont(self.track_label.font())
+        bold.setWeight(QFont.DemiBold)
+        title_fm, artist_fm = QFontMetrics(bold), QFontMetrics(self.track_label.font())
+        gap = 10
+        shown_title = title_fm.elidedText(title, Qt.ElideRight, room)
+        left = room - title_fm.horizontalAdvance(shown_title) - gap
+        shown_artist = artist_fm.elidedText(artist, Qt.ElideRight, left) if left > 24 and artist else ""
+        parts = f"<span style='color:{theme.TEXT};font-weight:600'>{html.escape(shown_title)}</span>"
+        if shown_artist:
+            parts += f"&nbsp;&nbsp;<span style='{muted}'>{html.escape(shown_artist)}</span>"
+        self.track_label.setText(parts)
 
     def _edge_at(self, pos: QPoint):
         margin = self._resize_margin
@@ -506,6 +563,9 @@ class LyricsOverlay(QWidget):
         return had_drag
 
     def eventFilter(self, obj, event):
+        if obj is self.track_label and event.type() == QEvent.Resize:
+            self._update_track_label()
+            return False
         if obj in (self.title_bar, self.scroll_area.viewport()):
             if event.type() == QEvent.MouseButtonPress:
                 if self._begin_interaction(event):
@@ -563,10 +623,17 @@ class LyricsOverlay(QWidget):
             # An invisible alpha-1 fill over the full rect makes it solid.
             painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
 
-        alpha = int(max(0.0, min(1.0, self.bg_opacity)) * 255)
-        painter.fillPath(path, QColor(15, 15, 15, alpha))
+        opacity = max(0.0, min(1.0, self.bg_opacity))
+        painter.fillPath(path, QColor(*theme.PANEL_RGB, int(opacity * 255)))
         if self.edit_mode:
-            painter.setPen(QPen(QColor(90, 170, 255, 230), 2))
+            edge = QColor(theme.ACCENT_UNLOCKED)
+            edge.setAlpha(230)
+            painter.setPen(QPen(edge, 2))
+            painter.drawPath(path)
+        elif opacity > 0.05:
+            # A faint rim so the panel reads as a surface on any wallpaper;
+            # it fades out together with the background.
+            painter.setPen(QPen(QColor(255, 255, 255, int(28 * opacity)), 1))
             painter.drawPath(path)
 
     def _on_opacity_changed(self, value: int):
@@ -656,7 +723,7 @@ class LyricsOverlay(QWidget):
             self._fetch_attempt += 1
             if state == "fallback" and plain:
                 if not self._showing_fallback:
-                    self._set_status_line(plain)
+                    self._set_status_line(plain, content=True)
                     self._showing_fallback = True
             elif not self._showing_fallback:
                 self._set_status_line(f"Lyrics server unavailable. Retrying in {delay}s...")
@@ -668,7 +735,7 @@ class LyricsOverlay(QWidget):
             self.synced_lines = synced
             self._render_synced_lines()
         elif state == "plain" and plain:
-            self._set_status_line(plain)
+            self._set_status_line(plain, content=True)
         elif state == "instrumental":
             self._set_status_line("(Instrumental -- no lyrics)")
         else:
@@ -677,16 +744,22 @@ class LyricsOverlay(QWidget):
     def _render_synced_lines(self):
         self._clear_lines()
         self.line_labels = []
-        for _timestamp, text in self.synced_lines:
+        self._stop_line_fade()
+        for i, (_timestamp, text) in enumerate(self.synced_lines):
             label = QLabel(text)
             label.setAlignment(Qt.AlignCenter)
             label.setWordWrap(True)
             label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            label.setStyleSheet("color: rgba(255,255,255,110); background: transparent;")
-            label.setFont(QFont("Segoe UI", 14))
+            label.setFont(theme.line_font(False))
             self.lyrics_layout.addWidget(label)
             self.line_labels.append(label)
+        # Colour lives in the palette, not a stylesheet: re-styling dozens of
+        # labels from a stylesheet every animation frame would be far costlier.
+        self._line_alpha = [theme.line_alpha(i + 1) for i in range(len(self.line_labels))]
+        for label, alpha in zip(self.line_labels, self._line_alpha):
+            self._set_label_alpha(label, alpha)
+        self._styled_index = -1
         self._active_index = -1
         self._update_dynamic_padding()
 
@@ -721,16 +794,55 @@ class LyricsOverlay(QWidget):
             self._auto_follow = True
             self._scroll_to_line(self._active_index)
 
+    def _set_label_alpha(self, label: QLabel, alpha: float):
+        palette = label.palette()
+        palette.setColor(QPalette.WindowText, theme.text_color(alpha))
+        label.setPalette(palette)
+
+    def _stop_line_fade(self):
+        if self._line_fade is not None:
+            self._line_fade.stop()
+            self._line_fade = None
+
     def _highlight_active_line(self, idx: int):
+        """Fonts switch at once (they change the layout the scroll target is
+        measured against); colours cross-fade, so the highlight moves smoothly
+        instead of snapping."""
+        old = self._styled_index
+        self._styled_index = idx
         for i, label in enumerate(self.line_labels):
-            if i == idx:
-                label.setStyleSheet("color: rgba(255,255,255,255); background: transparent; font-weight: 600;")
-                label.setFont(QFont("Segoe UI", 18, QFont.DemiBold))
-            else:
-                distance = abs(i - idx)
-                alpha = max(60, 150 - distance * 20)
-                label.setStyleSheet(f"color: rgba(255,255,255,{alpha}); background: transparent;")
-                label.setFont(QFont("Segoe UI", 14))
+            label.setFont(theme.line_font(i == idx))
+
+        targets = {}
+        for i in range(len(self.line_labels)):
+            near = (i - idx) ** 2 <= theme.FADE_RANGE ** 2 or (i - old) ** 2 <= theme.FADE_RANGE ** 2
+            target = theme.line_alpha(abs(i - idx) if idx >= 0 else i + 1)
+            if near or abs(self._line_alpha[i] - target) > 0.005:
+                targets[i] = target
+        starts = {i: self._line_alpha[i] for i in targets}
+
+        self._stop_line_fade()
+        duration = theme.motion_ms(240)
+        if duration == 0:
+            for i, target in targets.items():
+                self._line_alpha[i] = target
+                self._set_label_alpha(self.line_labels[i], target)
+            return
+
+        def step(t):
+            for i, target in targets.items():
+                alpha = starts[i] + (target - starts[i]) * t
+                self._line_alpha[i] = alpha
+                self._set_label_alpha(self.line_labels[i], alpha)
+
+        fade = QVariantAnimation(self)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setDuration(duration)
+        fade.setEasingCurve(QEasingCurve.OutCubic)
+        fade.valueChanged.connect(step)
+        self._line_fade = fade
+        fade.start()
 
     def _scroll_to_line(self, idx: int):
         if idx < 0 or idx >= len(self.line_labels):
@@ -751,7 +863,7 @@ class LyricsOverlay(QWidget):
 
         self._programmatic_scroll = True
         anim = QPropertyAnimation(self.scroll_area.verticalScrollBar(), b"value", self)
-        anim.setDuration(350)
+        anim.setDuration(theme.motion_ms(350))
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.setStartValue(self.scroll_area.verticalScrollBar().value())
         anim.setEndValue(int(target_y))
