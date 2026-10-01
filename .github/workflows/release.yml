@@ -13,6 +13,10 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # Optional code signing: add these two repository secrets to sign (see docs/SIGNING.md).
+      SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+      SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +35,14 @@ jobs:
               -not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
             choco install innosetup -y --no-progress
           }
+
+      - name: Prepare code-signing certificate (only if the secrets exist)
+        if: ${{ env.SIGNING_PFX_BASE64 != '' }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          "TD_SIGN_PFX=$pfx" >> $env:GITHUB_ENV
+          "TD_SIGN_PFX_PASSWORD=$env:SIGNING_PFX_PASSWORD" >> $env:GITHUB_ENV
 
       - name: Build installer
         run: powershell -ExecutionPolicy Bypass -File packaging\build.ps1

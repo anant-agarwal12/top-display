@@ -38,6 +38,11 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
+; Code signing: build.ps1 defines Sign and the "signer" command when a certificate is configured.
+#ifdef Sign
+SignTool=signer
+SignedUninstaller=yes
+#endif
 
 [Tasks]
 Name: "startup"; Description: "Start Top Display automatically when I sign in to Windows"; GroupDescription: "Startup:"

@@ -7,3 +7,7 @@ cache/
 build/
 dist/
 *.log
+# never commit signing material
+*.pfx
+*.p12
+*.snk

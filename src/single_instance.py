@@ -1,13 +1,18 @@
 """Keeps a second copy of the launcher/overlay from starting by holding a
 named Windows mutex for the life of the process."""
 import ctypes
+import os
 
 _ERROR_ALREADY_EXISTS = 183
 _held = []  # keeps the handle alive until the process exits
 
 
 def acquire(name: str) -> bool:
-    """Returns True if this is the only instance holding `name`."""
+    """Returns True if this is the only instance holding `name`.
+
+    TOPDISPLAY_INSTANCE (an arbitrary suffix) lets a test build run next to a real,
+    already-running copy without either blocking the other."""
+    name += os.environ.get("TOPDISPLAY_INSTANCE", "")
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateMutexW.restype = ctypes.c_void_p
     handle = kernel32.CreateMutexW(None, False, "Local\\" + name)

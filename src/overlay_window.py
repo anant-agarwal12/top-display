@@ -1,6 +1,7 @@
 """The transparent, always-on-top, scrollable lyrics overlay window."""
 import bisect
 import ctypes
+import os
 import time
 from typing import List, Optional, Tuple
 
@@ -197,6 +198,8 @@ class LyricsOverlay(QWidget):
         self.gear_window.animation_changed.connect(self.set_animation_style)
         self.gear_window.set_hotkey_handler(self._change_hotkey)
         self.gear_window.reset_hotkeys_requested.connect(self._reset_hotkeys)
+        self.gear_window.reset_window_requested.connect(self._reset_window)
+        self.gear_window.open_folder_requested.connect(self._open_settings_folder)
         # A dropdown's list is its own window; keep it above the dim layer while it is open.
         self.gear_window.popup_opened.connect(self.register_interactive_window)
         self.gear_window.popup_closed.connect(self.unregister_interactive_window)
@@ -638,6 +641,22 @@ class LyricsOverlay(QWidget):
         else:
             self.gear_window.show_message("Shortcuts reset.", error=False)
 
+    # ---------- General tab ----------
+    def _reset_window(self):
+        """Back to the first-run size and place (top-right of the main screen)."""
+        avail = QGuiApplication.primaryScreen().availableGeometry()
+        width, height = settings_store.DEFAULTS["window_w"], settings_store.DEFAULTS["window_h"]
+        self.setGeometry(avail.right() + 1 - width - 24, avail.top() + 24, width, height)
+        self._clamp_to_screens()
+        self._refresh_dim_mask()
+        self._save_geometry()
+
+    def _open_settings_folder(self):
+        try:
+            os.startfile(str(settings_store.settings_dir()))
+        except OSError:
+            pass
+
     def _on_gear_moved(self, x: int, y: int):
         self.cfg["gear_x"], self.cfg["gear_y"] = x, y
         settings_store.save_settings(self.cfg)
@@ -830,11 +849,20 @@ class LyricsOverlay(QWidget):
         if mode == "none" or not (0 <= idx < len(self.line_labels)):
             return
         start = self._timestamps[idx]
-        gap = (self._timestamps[idx + 1] - start) if idx + 1 < len(self._timestamps) else 4.0
+        chars = len(self.synced_lines[idx][1])
+        has_next = idx + 1 < len(self._timestamps)
+        gap = (self._timestamps[idx + 1] - start) if has_next else max(4.0, chars * 0.15)
         if mode == "sweep":
-            duration = min(max(0.6, gap) * 0.85, 7.0)      # finishes just before the next line
+            # There are no per-word timestamps, so the line's own duration is the
+            # time until the next line starts: the sweep lasts exactly that long and
+            # is complete the moment the next line takes over (which happens `lead`
+            # seconds before that line's timestamp). A very long gap is usually an
+            # instrumental break, not a slowly sung line, so the sweep is capped by
+            # how much text there is and the finished line simply stays filled.
+            duration = max(0.3, gap - self._style["lead"])
+            if has_next:
+                duration = min(duration, max(4.0, chars * 0.18))
         else:
-            chars = len(self.synced_lines[idx][1])
             duration = min(max(0.6, chars * 0.045), max(0.6, gap) * 0.8)
         self.line_labels[idx].set_progress((position - start) / duration)
 

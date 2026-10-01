@@ -5,21 +5,25 @@ construction: there is a single position, a single drag, and a single hole in
 the screen-dim layer. The window is only the size of the gear while the pane is
 closed, and grows to include the pane (on whichever side has room) when open.
 
-The pane edits: the lyric animation style, and the two keyboard shortcuts. It
-does not apply anything itself -- it reports changes through signals and a
+The pane is organised in tabs (Lyrics, Shortcuts, General) under a header that always
+shows the current song, with Quit always at the bottom -- so more settings can be added
+later as new tabs or new rows without the pane growing taller or turning into one long
+list. It does not apply anything itself: it reports changes through signals and a
 validator callback supplied by the overlay, which owns the real state.
 """
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QPoint, QRect, QRectF, QSize, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QPoint, QRect, QRectF, QSize, QTimer, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QStackedWidget, QVBoxLayout, QWidget,
 )
 
 import hotkey_spec
 import lyric_styles
 import theme
+from version import get_version
 
 GEAR_SIZE = 40
 GAP = 6                 # between the gear and the pane it opens
@@ -42,6 +46,15 @@ QPushButton#linkButton {{ color: {theme.TEXT_MUTED}; background: transparent; bo
     padding: 2px 4px; text-align: right; }}
 QPushButton#linkButton:hover {{ color: {theme.TEXT}; }}
 QPushButton#linkButton:focus {{ color: {theme.TEXT}; border: 1px solid {theme.ACCENT_UNLOCKED}; border-radius: 4px; }}
+QPushButton#tabButton {{ color: {theme.TEXT_MUTED}; background: transparent;
+    border: 1px solid transparent; border-radius: 7px; padding: 4px 0; }}
+QPushButton#tabButton:hover {{ color: {theme.TEXT}; }}
+QPushButton#tabButton:checked {{ color: {theme.TEXT}; background: rgba(255,255,255,30); }}
+QPushButton#tabButton:focus {{ border: 1px solid {theme.ACCENT_UNLOCKED}; }}
+QPushButton#actionButton {{ color: {theme.TEXT}; background: rgba(255,255,255,16);
+    border: 1px solid rgba(255,255,255,34); border-radius: 8px; padding: 6px 10px; text-align: left; }}
+QPushButton#actionButton:hover {{ background: rgba(255,255,255,30); }}
+QPushButton#actionButton:focus {{ border: 1px solid {theme.ACCENT_UNLOCKED}; }}
 """
 
 
@@ -242,12 +255,72 @@ class _HotkeyRow(QWidget):
         self.edited.emit(self.kind, self.value())
 
 
+class _TabBar(QWidget):
+    """A segmented control: one button per settings page. Left/Right arrows move between
+    tabs when one has keyboard focus."""
+    changed = Signal(int)
+
+    def __init__(self, names, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(34)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(3, 3, 3, 3)
+        row.setSpacing(2)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self.buttons = []
+        self._index = 0
+        for i, name in enumerate(names):
+            button = QPushButton(name)
+            button.setObjectName("tabButton")
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFont(theme.make_font(9.5, theme.QFont.DemiBold))
+            button.setAccessibleName(f"{name} settings")
+            button.clicked.connect(lambda _checked=False, k=i: self.set_current(k))
+            button.installEventFilter(self)
+            self._group.addButton(button)
+            row.addWidget(button, 1)
+            self.buttons.append(button)
+        self.buttons[0].setChecked(True)
+
+    def current(self) -> int:
+        return self._index
+
+    def set_current(self, index: int):
+        index = max(0, min(len(self.buttons) - 1, index))
+        self.buttons[index].setChecked(True)
+        if index != self._index:
+            self._index = index
+            self.changed.emit(index)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Left, Qt.Key_Right) and obj in self.buttons:
+            target = self.buttons.index(obj) + (1 if event.key() == Qt.Key_Right else -1)
+            if 0 <= target < len(self.buttons):
+                self.set_current(target)
+                self.buttons[target].setFocus()
+            return True
+        return super().eventFilter(obj, event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        painter.fillPath(path, QColor(255, 255, 255, 14))
+
+
 class _Pane(QFrame):
     animation_changed = Signal(str)
     reset_hotkeys_requested = Signal()
+    reset_window_requested = Signal()
+    open_folder_requested = Signal()
     popup_shown = Signal(QWidget)
     popup_hidden = Signal(QWidget)
     quit_requested = Signal()
+
+    TAB_NAMES = ("Lyrics", "Shortcuts", "General")
 
     def __init__(self, parent, animation_key: str, toggle_combo: str, lock_combo: str):
         super().__init__(parent)
@@ -260,6 +333,7 @@ class _Pane(QFrame):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(0)
 
+        # ---- always visible: what is playing ----
         layout.addWidget(self._caption("NOW PLAYING"))
         layout.addSpacing(6)
         self.title = _ElidedLabel()
@@ -271,12 +345,60 @@ class _Pane(QFrame):
         self.artist.setStyleSheet(f"color: {theme.TEXT_MUTED};")
         layout.addWidget(self.artist)
         self.set_now_playing(None, None)
-
         layout.addSpacing(12)
+
+        # ---- the tabs ----
+        self.tabs = _TabBar(self.TAB_NAMES)
+        layout.addWidget(self.tabs)
+        layout.addSpacing(12)
+        self.stack = QStackedWidget()
+        self.pages = [self._build_lyrics_page(animation_key),
+                      self._build_shortcuts_page(toggle_combo, lock_combo),
+                      self._build_general_page()]
+        for page in self.pages:
+            self.stack.addWidget(page)
+        self.fit_pages()
+        self.tabs.changed.connect(self.stack.setCurrentIndex)
+        layout.addWidget(self.stack)
+
+        # ---- always visible: quit ----
+        layout.addSpacing(10)
         layout.addWidget(self._divider())
         layout.addSpacing(12)
+        quit_btn = QPushButton("Quit Top Display")
+        quit_btn.setCursor(Qt.PointingHandCursor)
+        quit_btn.setFont(theme.make_font(9.5, theme.QFont.DemiBold))
+        quit_btn.setStyleSheet(
+            f"QPushButton {{ color: {theme.TEXT}; background: rgba(255,255,255,16);"
+            " border: 1px solid rgba(255,255,255,34); border-radius: 8px; padding: 7px; }"
+            "QPushButton:hover { background: rgba(239,68,68,210); border-color: transparent; }"
+            f"QPushButton:focus {{ border: 1px solid {theme.ACCENT_UNLOCKED}; }}"
+        )
+        quit_btn.clicked.connect(self.quit_requested)
+        layout.addWidget(quit_btn)
 
-        layout.addWidget(self._caption("LYRIC ANIMATION"))
+    def fit_pages(self):
+        """Every tab gets the same height (the tallest), so switching tabs never moves or
+        resizes the pane. Measured after the stylesheet has been applied: before that, the
+        pages report smaller sizes than they really need and their content gets clipped.
+        A page that outgrows this later should scroll rather than push the pane taller."""
+        self.ensurePolished()
+        height = max(page.sizeHint().height() for page in self.pages)
+        if height != self.stack.height():
+            self.stack.setFixedHeight(height)
+
+    # ---------- pages ----------
+    @staticmethod
+    def _new_page():
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        return page, layout
+
+    def _build_lyrics_page(self, animation_key: str) -> QWidget:
+        page, layout = self._new_page()
+        layout.addWidget(self._caption("ANIMATION"))
         layout.addSpacing(6)
         self.style_box = _Combo()
         for key, style in lyric_styles.STYLES.items():
@@ -292,16 +414,16 @@ class _Pane(QFrame):
         self.style_hint.setWordWrap(True)
         self.style_hint.setFont(theme.make_font(8.5))
         self.style_hint.setStyleSheet(f"color: {theme.TEXT_MUTED};")
-        self.style_hint.setFixedHeight(32)   # two lines, so the pane never changes height
+        self.style_hint.setFixedHeight(32)   # two lines, so the page never changes height
         self.style_hint.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         layout.addWidget(self.style_hint)
         self._update_style_hint()
+        layout.addStretch(1)
+        return page
 
-        layout.addSpacing(10)
-        layout.addWidget(self._divider())
-        layout.addSpacing(12)
-
-        layout.addWidget(self._caption("SHORTCUTS"))
+    def _build_shortcuts_page(self, toggle_combo: str, lock_combo: str) -> QWidget:
+        page, layout = self._new_page()
+        layout.addWidget(self._caption("KEYBOARD SHORTCUTS"))
         layout.addSpacing(8)
         self.toggle_row = _HotkeyRow("toggle", "Start / stop", toggle_combo)
         self.lock_row = _HotkeyRow("lock", "Lock / unlock", lock_combo)
@@ -332,19 +454,36 @@ class _Pane(QFrame):
         self._message_timer = QTimer(self)
         self._message_timer.setSingleShot(True)
         self._message_timer.timeout.connect(lambda: self.message.setText(""))
+        layout.addStretch(1)
+        return page
 
+    def _build_general_page(self) -> QWidget:
+        page, layout = self._new_page()
+        layout.addWidget(self._caption("WINDOW"))
         layout.addSpacing(6)
-        quit_btn = QPushButton("Quit Top Display")
-        quit_btn.setCursor(Qt.PointingHandCursor)
-        quit_btn.setFont(theme.make_font(9.5, theme.QFont.DemiBold))
-        quit_btn.setStyleSheet(
-            f"QPushButton {{ color: {theme.TEXT}; background: rgba(255,255,255,16);"
-            " border: 1px solid rgba(255,255,255,34); border-radius: 8px; padding: 7px; }"
-            "QPushButton:hover { background: rgba(239,68,68,210); border-color: transparent; }"
-            f"QPushButton:focus {{ border: 1px solid {theme.ACCENT_UNLOCKED}; }}"
-        )
-        quit_btn.clicked.connect(self.quit_requested)
-        layout.addWidget(quit_btn)
+        reset_window = QPushButton("Reset window position and size")
+        reset_window.setObjectName("actionButton")
+        reset_window.setCursor(Qt.PointingHandCursor)
+        reset_window.setFont(theme.make_font(9.5))
+        reset_window.clicked.connect(self.reset_window_requested)
+        layout.addWidget(reset_window)
+        layout.addSpacing(14)
+        layout.addWidget(self._caption("FILES"))
+        layout.addSpacing(6)
+        open_folder = QPushButton("Open settings folder")
+        open_folder.setObjectName("actionButton")
+        open_folder.setCursor(Qt.PointingHandCursor)
+        open_folder.setFont(theme.make_font(9.5))
+        open_folder.setToolTip("Settings and the error log live here")
+        open_folder.clicked.connect(self.open_folder_requested)
+        layout.addWidget(open_folder)
+        layout.addStretch(1)
+        layout.addSpacing(8)
+        self.version_label = QLabel(f"Top Display {get_version()}  \u00b7  GPL-3.0")
+        self.version_label.setFont(theme.make_font(8.5))
+        self.version_label.setStyleSheet(f"color: {theme.TEXT_MUTED};")
+        layout.addWidget(self.version_label)
+        return page
 
     # ---------- small builders ----------
     @staticmethod
@@ -362,6 +501,10 @@ class _Pane(QFrame):
         return line
 
     # ---------- state ----------
+    def set_tab(self, index: int):
+        self.tabs.set_current(index)
+        self.stack.setCurrentIndex(self.tabs.current())
+
     def set_now_playing(self, title: Optional[str], artist: Optional[str]):
         if title is None:
             self.title.set_full_text("Nothing playing")
@@ -379,6 +522,8 @@ class _Pane(QFrame):
         self.lock_row.set_value(lock)
 
     def show_message(self, text: str, error: bool = True):
+        # Shortcut messages belong on the Shortcuts tab; make sure the user can see them.
+        self.set_tab(1)
         color = _ERROR_COLOR if error else theme.TEXT_MUTED
         self.message.setStyleSheet(f"color: {color};")
         self.message.setText(text)
@@ -422,6 +567,8 @@ class GearWindow(QWidget):
     position_saved = Signal(int, int)    # gear's screen position, after a drag ends
     animation_changed = Signal(str)
     reset_hotkeys_requested = Signal()
+    reset_window_requested = Signal()
+    open_folder_requested = Signal()
     popup_opened = Signal(QWidget)       # a dropdown list opened (it needs a hole in the dim layer)
     popup_closed = Signal(QWidget)
     quit_requested = Signal()
@@ -445,6 +592,8 @@ class GearWindow(QWidget):
         self.gear.drag_end.connect(self._on_drag_end)
         self.pane.animation_changed.connect(self.animation_changed)
         self.pane.reset_hotkeys_requested.connect(self.reset_hotkeys_requested)
+        self.pane.reset_window_requested.connect(self.reset_window_requested)
+        self.pane.open_folder_requested.connect(self.open_folder_requested)
         self.pane.popup_shown.connect(self.popup_opened)
         self.pane.popup_hidden.connect(self.popup_closed)
         self.pane.quit_requested.connect(self.quit_requested)
@@ -496,6 +645,7 @@ class GearWindow(QWidget):
         return screen.availableGeometry()
 
     def _pane_height(self) -> int:
+        self.pane.fit_pages()
         layout = self.pane.layout()
         return layout.totalHeightForWidth(PANE_WIDTH) if layout.hasHeightForWidth() else self.pane.sizeHint().height()
 

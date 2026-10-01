@@ -9,10 +9,11 @@ root = Path(SPECPATH).parent
 a = Analysis(
     [str(root / "src" / "app.py")],
     pathex=[str(root), str(root / "src")],
+    datas=[(str(root / "VERSION"), ".")],     # read by version.py for the About line
     hiddenimports=[
         # imported inside functions in app.py
         "main", "launcher", "single_instance",
-        "gear_window", "lyric_label", "lyric_styles", "hotkey_spec", "theme",
+        "gear_window", "lyric_label", "lyric_styles", "hotkey_spec", "theme", "version",
         # WinRT bindings used by media_session.py
         "winsdk.windows.media.control",
         "winsdk.windows.foundation",

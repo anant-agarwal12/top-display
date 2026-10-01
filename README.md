@@ -81,6 +81,9 @@ powershell -ExecutionPolicy Bypass -File packaging\build.ps1   # -> dist\TopDisp
 ```
 The same build can be run on GitHub Actions (Actions tab -> Release -> Run workflow).
 
+The installer is currently unsigned (Windows SmartScreen will warn on first run). The build signs
+automatically once a certificate is configured; see [docs/SIGNING.md](docs/SIGNING.md).
+
 Silent installs can choose the shortcuts too:
 `TopDisplay-Setup-x.y.z.exe /VERYSILENT /TOGGLEHOTKEY=Ctrl+Alt+K /LOCKHOTKEY=Ctrl+Alt+J`
 

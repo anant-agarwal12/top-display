@@ -29,6 +29,11 @@ DEFAULTS = {
 }
 
 
+def settings_dir() -> Path:
+    """The folder holding settings.json and the error log."""
+    return _SETTINGS_DIR
+
+
 def _sanitise_hotkeys(merged: dict) -> dict:
     """A hand-edited or corrupt shortcut falls back to its default, and the two
     shortcuts can never be the same (that would make one of them dead)."""
