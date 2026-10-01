@@ -94,6 +94,8 @@ Silent installs can choose the shortcuts too:
 ```
 
 ## Data sources and privacy
+Full details in [docs/PRIVACY.md](docs/PRIVACY.md). In short:
+
 Lyrics come from [lrclib.net](https://lrclib.net) (synced) with
 [lyrics.ovh](https://lyrics.ovh) as a plain-text fallback. The artist, title, album and
 duration of the current song are sent to those services to look up lyrics. Nothing else

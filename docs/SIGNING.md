@@ -1,67 +1,76 @@
-# Code signing
+# Code signing and distribution
 
-Top Display's installer is currently **unsigned**, so Windows SmartScreen shows "Windows protected
-your PC" with an unknown publisher the first time someone runs it. Signing the installer (and the
-app) with a certificate from a certificate authority Windows trusts replaces "Unknown publisher"
-with a verified name.
-
-The build is already prepared for it. Signing switches on by itself the moment a certificate is
-configured; with none configured the build is simply unsigned.
+Top Display's direct-download installer is currently **unsigned**, so Windows SmartScreen shows
+"Windows protected your PC" with an unknown publisher the first time someone runs it. This page
+explains the realistic ways to deal with that. (Facts below were checked against Microsoft's and
+SignPath's own pages in October 2026; prices and eligibility change, so re-check before acting.)
 
 ## What signing does and does not do
 - It proves who published the file and that it has not been modified since.
-- It does **not** instantly remove the SmartScreen warning. SmartScreen also judges how many people
-  have run a file, so a new publisher can still see a warning for a while. Ordinary (OV) and
-  extended (EV) certificates both build that reputation over time.
-- A **self-signed** certificate protects nothing for other people: Windows does not trust it, and
-  to make it work every user would have to install your certificate as trusted, which they should
-  not do. It is only useful for testing the build (the repository's tests use a throwaway one).
+- It does **not** instantly remove the SmartScreen warning. Since 2024 even EV certificates build
+  reputation gradually, like ordinary (OV) ones; a new publisher can still see a warning for a
+  while. Signing every release with the same identity lets reputation accumulate.
+- A **self-signed** certificate protects nothing for other people: Windows does not trust it and
+  blocks it for the public. It is only useful for testing the build, which is how the
+  repository's tests use one (a throwaway that is deleted afterwards).
 
-## Ways to get a certificate
-You need a real identity check by someone, so this part cannot be automated. In rough order of fit
-for a small open-source project:
+## The options
 
-1. **SignPath Foundation** (free for open-source projects). The project must be public, use an
-   OSI-approved license (GPL-3.0 qualifies) and build in CI; they sign in their cloud, so the key
-   never leaves their hardware. The published name is the foundation's. Apply at signpath.org and
-   check their current conditions. Signing then happens from the GitHub Actions workflow via their
-   action instead of `sign.ps1`.
-2. **Azure Artifact Signing** (formerly Trusted Signing), a low monthly fee. Eligibility depends on
-   country and on whether you are an individual or an organisation, so check that it is available
-   to you before relying on it.
-3. **A commercial code-signing certificate** (DigiCert, Sectigo, SSL.com and others, roughly
-   US$100-400 a year). Since 2023 the private key must live on hardware (a USB token) or in the
-   authority's cloud HSM, so you cannot simply export a `.pfx`. Use the thumbprint option below
-   for a token that appears in the Windows certificate store, or the authority's own signing tool
-   for a cloud HSM.
+| Route | Cost | Works from India? | Who is named as publisher | SmartScreen |
+| --- | --- | --- | --- | --- |
+| **Microsoft Store, packaged as MSIX** | free developer account (no registration fee for individuals) | yes, nearly 200 markets | you, as the Store publisher | no warning; Microsoft signs the package for you, no certificate to buy or renew |
+| **Microsoft Store, as an EXE/MSI installer** | needs a certificate from a trusted CA | yes | you | the Store does not sign it for you |
+| **SignPath Foundation** (open source) | free | yes | **SignPath Foundation**, not you | builds reputation over time |
+| **Azure Artifact Signing** | about US$10 a month | **no**: individuals only in the USA and Canada | you | builds reputation over time |
+| **OV certificate** (DigiCert, Sectigo, GlobalSign...) | about US$150-300 a year | yes | you | builds reputation over time |
+| **EV certificate** | US$400+ a year | yes | you | same as OV since 2024, so not worth it for this |
 
-## Turning signing on
-Set these environment variables, then run `packaging\build.ps1` as usual
-(`packaging\sign.ps1` documents them too):
+### SignPath Foundation: the conditions that matter
+- An OSI-approved license (GPL-3.0 qualifies) and **no commercial dual-licensing**. If you may
+  sell a separate commercial license later, this route is closed.
+- The project must be actively maintained, already released in the form to be signed, and public.
+- A "Code Signing Policy" must be shown on the project's homepage or download page: who the
+  committers, reviewers and approvers are, a privacy statement, and a credit to SignPath.
+- Every release is approved by hand before signing; team members use two-factor authentication.
+- Acceptance is at their discretion, and they look for an established project.
+
+### OV certificate
+Since June 2023 the private key must live on hardware (a USB token) or in the authority's cloud
+HSM, so you cannot just export a `.pfx` for CI. Use the thumbprint option below for a token that
+shows up in the Windows certificate store, or the authority's own signing tool for a cloud HSM.
+
+## What this repo already does
+The build is prepared for signing. It switches on by itself when a certificate is configured;
+with none configured the build is simply unsigned. Set these, then run `packaging\build.ps1`:
 
 | Variable | Meaning |
 | --- | --- |
 | `TD_SIGN_PFX` | path to a `.pfx` file (only if your authority gives you an exportable one) |
 | `TD_SIGN_PFX_PASSWORD` | its password |
-| `TD_SIGN_THUMBPRINT` | alternatively, the thumbprint of a certificate in your Windows certificate store (hardware tokens usually appear there) |
+| `TD_SIGN_THUMBPRINT` | alternatively, the thumbprint of a certificate in your Windows certificate store |
 | `TD_SIGN_TIMESTAMP_URL` | optional; defaults to `http://timestamp.digicert.com` |
 
-The build then signs `TopDisplay.exe`, the installer, and the uninstaller the installer writes,
-all with a timestamp (without one, a signature stops being valid the day the certificate expires,
-so signing fails rather than skipping it). It ends by printing who signed the installer.
-
-Check any file yourself with:
+It then signs `TopDisplay.exe`, the installer and the uninstaller the installer writes, all with
+a timestamp (without one a signature stops being valid the day the certificate expires, so
+signing fails rather than skipping it). Check any file with:
 
 ```powershell
 Get-AuthenticodeSignature dist\TopDisplay-Setup-<version>.exe | Format-List Status, SignerCertificate, TimeStamperCertificate
 ```
-`Valid` means signed by a trusted authority. `UnknownError` with a signer present means signed but
-by a certificate Windows does not trust (for example the test certificate).
+`Valid` means signed by a trusted authority. `UnknownError` with a signer present means signed by
+a certificate Windows does not trust (for example the test certificate).
 
-## Signing in GitHub Actions
-The release workflow (manual runs only) will sign if two repository secrets exist:
-`SIGNING_PFX_BASE64` (the `.pfx`, base64-encoded) and `SIGNING_PFX_PASSWORD`. This only suits an
-exportable certificate, and it has not been run against a real one yet because none exists. For
-SignPath or a cloud HSM the workflow step is different; ask when you get that far.
+The release workflow (manual runs) signs too if the repository secrets `SIGNING_PFX_BASE64` and
+`SIGNING_PFX_PASSWORD` exist. That only suits an exportable certificate and has not been run
+against a real one. SignPath and cloud-HSM routes need a different workflow step.
 
-Never commit a `.pfx`, a password, or a token. `.gitignore` already excludes `*.pfx`.
+Never commit a `.pfx`, a password or a token. `.gitignore` already excludes `*.pfx`.
+
+## Microsoft Store (MSIX): what it would take
+Not done yet. Roughly: a Store developer account (government ID and a selfie, free), an MSIX
+package built from the PyInstaller output with a manifest (full-trust desktop app, a start-up task
+for "start with Windows"), the usual Store assets and listing text, a privacy policy URL
+(`docs/PRIVACY.md`), and certification. Differences to plan for: there is no installer wizard in
+an MSIX, so shortcuts are chosen in the settings pane; settings written under `%APPDATA%` are
+redirected into the package's own folder; and the listing must not use another company's
+trademark as a name or keyword (Spotify may be mentioned only to say what the app works with).
