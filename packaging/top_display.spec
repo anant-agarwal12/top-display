@@ -12,6 +12,7 @@ a = Analysis(
     hiddenimports=[
         # imported inside functions in app.py
         "main", "launcher", "single_instance",
+        "gear_window", "lyric_label", "lyric_styles", "hotkey_spec", "theme",
         # WinRT bindings used by media_session.py
         "winsdk.windows.media.control",
         "winsdk.windows.foundation",

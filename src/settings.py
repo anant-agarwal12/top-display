@@ -46,7 +46,7 @@ def _sanitise_hotkeys(merged: dict) -> dict:
 def load_settings() -> dict:
     if _SETTINGS_FILE.exists():
         try:
-            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8-sig"))
             merged = dict(DEFAULTS)
             merged.update(data)
             return _sanitise_hotkeys(merged)
@@ -60,7 +60,7 @@ def read_hotkeys_strict() -> Optional[dict]:
     unreadable, mid-write or holds anything invalid. The tray launcher uses
     this so a half-written file can never make it rebind to something else."""
     try:
-        data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8-sig"))
         toggle = hotkey_spec.normalize(data["hotkey_toggle"])
         lock = hotkey_spec.normalize(data["hotkey_lock"])
     except Exception:
@@ -98,7 +98,7 @@ def set_hotkeys(toggle: str, lock: str) -> bool:
     data = {}
     if _SETTINGS_FILE.exists():
         try:
-            loaded = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+            loaded = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8-sig"))
             data = loaded if isinstance(loaded, dict) else {}
         except Exception:
             data = {}

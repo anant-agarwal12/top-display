@@ -24,7 +24,12 @@ if (-not $candidates) { throw "Inno Setup 6 not found. Install it: winget instal
 $scratch = Join-Path $env:TEMP 'TopDisplayInstallerBuild'
 Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $scratch | Out-Null
-& $candidates[0] "/DAppVersion=$version" "/O$scratch" packaging\installer.iss
+# File-version metadata must be four plain numbers: 0.2.0-beta.1 -> 0.2.0.1
+$parts = @([regex]::Matches($version, '\d+') | ForEach-Object { $_.Value })
+while ($parts.Count -lt 4) { $parts += '0' }
+$numeric = ($parts | Select-Object -First 4) -join '.'
+
+& $candidates[0] "/DAppVersion=$version" "/DAppVersionNumeric=$numeric" "/O$scratch" packaging\installer.iss
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 Copy-Item (Join-Path $scratch "TopDisplay-Setup-$version.exe") dist\ -Force
 
