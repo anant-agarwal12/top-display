@@ -255,7 +255,8 @@ class LyricsOverlay(QWidget):
     # ---------- UI construction ----------
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 6, 10, 10)
+        # The top strip is where the opacity bar floats while unlocked, so lyrics never run under it.
+        root.setContentsMargins(10, 32, 10, 10)
         root.setSpacing(4)
 
         # The opacity slider is the only control left on the lyrics window. It

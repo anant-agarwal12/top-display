@@ -126,52 +126,77 @@ class LyricLabel(QLabel):
         tl.endLayout()
         self._tl, self._lines, self._text_height = tl, lines, y
 
-    def _draw_lines(self, painter: QPainter, origin: QPointF, color: QColor, reveal: Optional[List[float]]):
-        """Draws the text; `reveal[k]` (if given) limits line k to its first x pixels."""
+    @staticmethod
+    def _extent(line: QTextLine):
+        """(left, right) x of the text on this line, alignment included.
+
+        QTextLine.x() is NOT that: for centred text it stays 0 and Qt adds the centring
+        offset only when drawing. cursorToX() does include it."""
+        left = line.cursorToX(line.textStart())
+        right = line.cursorToX(line.textStart() + line.textLength())
+        left = left[0] if isinstance(left, tuple) else left
+        right = right[0] if isinstance(right, tuple) else right
+        return left, right
+
+    def _draw_lines(self, painter: QPainter, origin: QPointF, color: QColor,
+                    reveal: Optional[List[float]], beyond: bool = False):
+        """Draws the text. `reveal[k]` (if given) is the x, in layout coordinates, that line k
+        is cut at: by default only the part left of it is drawn; with `beyond=True` only the
+        part right of it. (The two halves meet at the same x, so a glyph is drawn in exactly
+        one colour, with no fringe of the other.)"""
         painter.setPen(color)
         for k, line in enumerate(self._lines):
-            if reveal is not None:
-                limit = reveal[k]
-                if limit <= 0:
+            if reveal is None:
+                line.draw(painter, origin)
+                continue
+            limit = reveal[k] + 2
+            left, right = self._extent(line)
+            if beyond:
+                if limit <= left:                     # nothing revealed yet: the whole line
+                    line.draw(painter, origin)
                     continue
-                painter.save()
-                painter.setClipRect(QRectF(
-                    origin.x() + line.x() - 1, origin.y() + line.y() - 1,
-                    limit + 2, line.height() + 2,
-                ), Qt.IntersectClip)
-                line.draw(painter, origin)
-                painter.restore()
+                if limit >= right + 2:                # everything revealed: nothing left to draw
+                    continue
+                clip = QRectF(origin.x() + limit, origin.y() + line.y() - 1,
+                              right - limit + 8, line.height() + 2)
             else:
-                line.draw(painter, origin)
+                if limit <= left + 2:
+                    continue
+                clip = QRectF(origin.x() + left - 4, origin.y() + line.y() - 1,
+                              limit - left + 4, line.height() + 2)
+            painter.save()
+            painter.setClipRect(clip, Qt.IntersectClip)
+            line.draw(painter, origin)
+            painter.restore()
 
-    def _sweep_widths(self, fraction: float) -> List[float]:
-        """Pixels of each line that the sweep has reached, spread over the whole text."""
-        total = sum(line.naturalTextWidth() for line in self._lines) or 1.0
+    def _sweep_limits(self, fraction: float) -> List[float]:
+        """For each line, the x the sweep has reached: spread over all lines by their real widths."""
+        extents = [self._extent(line) for line in self._lines]
+        total = sum(right - left for left, right in extents) or 1.0
         remaining = fraction * total
-        out = []
-        for line in self._lines:
-            width = line.naturalTextWidth()
-            out.append(max(0.0, min(width, remaining)))
+        limits = []
+        for left, right in extents:
+            width = right - left
+            limits.append(left + max(0.0, min(width, remaining)))
             remaining -= width
-        return out
+        return limits
 
-    def _typed_widths(self, fraction: float) -> List[float]:
-        """Pixels of each line that the typed characters cover."""
-        count = len(self.text())
-        typed = int(round(fraction * count))
-        out = []
+    def _typed_limits(self, fraction: float) -> List[float]:
+        """For each line, the x its typed characters reach."""
+        typed = int(round(fraction * len(self.text())))
+        limits = []
         for line in self._lines:
             start, length = line.textStart(), line.textLength()
             n = max(0, min(length, typed - start))
+            left, right = self._extent(line)
             if n <= 0:
-                out.append(0.0)
+                limits.append(left)
             elif n >= length:
-                out.append(line.naturalTextWidth())
+                limits.append(right)
             else:
                 x = line.cursorToX(start + n)
-                x = x[0] if isinstance(x, tuple) else x
-                out.append(max(0.0, x - line.x()))
-        return out
+                limits.append(x[0] if isinstance(x, tuple) else x)
+        return limits
 
     # ---------- painting ----------
     def paintEvent(self, event):
@@ -193,12 +218,20 @@ class LyricLabel(QLabel):
         if self._mode == "type":
             if self._progress <= 0.0:
                 return   # a line that has not started typing yet shows nothing
-            reveal = None if self._progress >= 1.0 else self._typed_widths(self._progress)
+            reveal = None if self._progress >= 1.0 else self._typed_limits(self._progress)
             self._draw_lines(painter, origin, base, reveal)
             return
 
-        self._draw_lines(painter, origin, base, None)
         if self._mode == "sweep" and self._progress > 0.0:
             fill = QColor(self._accent)
             fill.setAlphaF(max(self._alpha, 0.55))
-            self._draw_lines(painter, origin, fill, self._sweep_widths(self._progress))
+            if self._progress >= 0.999:
+                # A finished line is just the fill colour, drawn with no clipping at all, so
+                # not one pixel can be missed.
+                self._draw_lines(painter, origin, fill, None)
+            else:
+                limits = self._sweep_limits(self._progress)
+                self._draw_lines(painter, origin, fill, limits)                  # the part sung so far
+                self._draw_lines(painter, origin, base, limits, beyond=True)     # the part still to come
+            return
+        self._draw_lines(painter, origin, base, None)
