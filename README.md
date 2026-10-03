@@ -7,7 +7,7 @@ and highlighting the current line, so you can sing along without switching windo
 > Not affiliated with or endorsed by Spotify. Lyrics are fetched from third-party
 > services and belong to their respective rights holders.
 
-The website (with a live demo of the animations) is in [`site/`](site/). It deploys to Vercel, and its download button follows the newest stable release automatically.
+**Website and downloads: https://top-display.vercel.app** (it has a live demo of the animations). Its source is in [`site/`](site/); the download button follows the newest stable release.
 
 ## Features
 - Synced lyrics that follow playback, with the current line highlighted and centred
