@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Top Display: synced lyrics that float over your work</title>
+<meta name="description" content="Top Display is a free Windows app that shows the lyrics of the song playing in Spotify as a small floating window, scrolling in time. Sing along without switching windows.">
+<meta name="theme-color" content="#eef1fb">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="assets/fonts/display.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Top Display: synced lyrics that float over your work">
+<meta property="og:description" content="A free Windows app that shows the lyrics of your Spotify song as a small floating window, scrolling in time.">
+<meta property="og:image" content="https://top-display.vercel.app/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Top Display","applicationCategory":"MultimediaApplication","operatingSystem":"Windows 10, Windows 11","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://www.gnu.org/licenses/gpl-3.0.html","codeRepository":"https://github.com/anant-agarwal12/top-display"}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="wrap top">
+  <a class="brand" href="./" aria-label="Top Display, home">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#16143a"/><rect x="10" y="8.5" width="12" height="3" rx="1.5" fill="#fff" opacity=".45"/><rect x="7" y="14" width="18" height="4.4" rx="2.2" fill="#22c55e"/><rect x="11" y="20.5" width="10" height="3" rx="1.5" fill="#fff" opacity=".45"/></svg>
+    Top Display
+  </a>
+  <nav aria-label="Main">
+    <a href="#make">How it works</a>
+    <a href="#faq">Questions</a>
+    <a href="https://github.com/anant-agarwal12/top-display">Source</a>
+    <a class="pill" href="#download">Download</a>
+  </nav>
+</header>
+
+<main id="main">
+
+<!-- ===== hero: the product, running ===== -->
+<section class="hero" aria-labelledby="h-hero">
+  <div class="wrap hero__grid">
+    <div class="hero__copy">
+      <h1 id="h-hero">Lyrics for your song, floating over your work.</h1>
+      <p class="hero__lede">Top Display shows the lyrics of the song playing in Spotify as a small window that scrolls in time. Sing along without switching tabs.</p>
+      <div class="hero__actions">
+        <a class="btn" href="https://github.com/anant-agarwal12/top-display/releases/latest" data-release-link>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16"/></svg>
+          Download for Windows
+        </a>
+        <a class="link" href="#make">See how it works</a>
+      </div>
+      <ul class="hero__facts">
+        <li>Version <span data-release="version">0.2.0</span>, <span data-release="size">40.8 MB</span></li>
+        <li>Free and open source</li>
+        <li>For Windows 11 and 10, with the Spotify desktop app</li>
+      </ul>
+    </div>
+
+    <div class="hero__stage">
+      <div class="stage" role="img" aria-label="Demo: the Top Display window floating over a spreadsheet, scrolling lyrics in time with a song.">
+        <div class="work" aria-hidden="true">
+          <div class="work__bar"><span>budget.xlsx</span><i>&ndash; &#9633; &times;</i></div>
+          <div class="work__formula"><b>E7</b> <span>=SUM(B7:D7)</span></div>
+          <div class="work__grid">
+            <span class="h"></span><span class="h">A</span><span class="h">B</span><span class="h">C</span><span class="h">D</span><span class="h">E</span>
+            <span class="h">1</span><span>Item</span><span class="n">Jan</span><span class="n">Feb</span><span class="n">Mar</span><span class="n">Total</span>
+            <span class="h">2</span><span>Hosting</span><span class="n">120</span><span class="n">120</span><span class="n">135</span><span class="n">375</span>
+            <span class="h">3</span><span>Design</span><span class="n">840</span><span class="n">640</span><span class="n">0</span><span class="n">1,480</span>
+            <span class="h">4</span><span>Tools</span><span class="n">59</span><span class="n">59</span><span class="n">59</span><span class="n">177</span>
+            <span class="h">5</span><span>Travel</span><span class="n">0</span><span class="n">410</span><span class="n">220</span><span class="n">630</span>
+            <span class="h">6</span><span>Misc</span><span class="n">35</span><span class="n">12</span><span class="n">48</span><span class="n">95</span>
+            <span class="h">7</span><span>Total</span><span class="n">1,054</span><span class="n">1,241</span><span class="n">462</span><span class="n sel">2,757</span>
+          </div>
+        </div>
+        <div class="panel" aria-hidden="true">
+          <div class="lyrics" id="demo" data-style="smooth" data-mode="none"><div class="track" id="demo-track"></div></div>
+        </div>
+      </div>
+      <div class="controls">
+        <span class="controls__label" id="style-label">Animation</span>
+        <div class="seg" role="radiogroup" aria-labelledby="style-label" id="style-seg"></div>
+        <button class="pause" type="button" id="pause" aria-pressed="false">
+          <svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true" id="pause-icon"><rect x="2" y="1" width="3" height="10" rx="1"/><rect x="7" y="1" width="3" height="10" rx="1"/></svg>
+          <span id="pause-text">Pause</span>
+        </button>
+        <p class="controls__hint" id="style-hint" aria-live="polite"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== unlock, move, settings ===== -->
+<section class="section" id="make" aria-labelledby="h-make">
+  <div class="wrap make__grid">
+    <div class="make__copy">
+      <h2 id="h-make">Just lyrics, until you want to change something.</h2>
+      <p style="margin-top:1.4rem;color:var(--ink-soft)">Locked, Top Display is only the lyrics: no title bar, no buttons. Unlock it to drag it anywhere, resize it, set how see-through it is, and open settings from a small gear that follows you around.</p>
+      <div class="keycaps" aria-label="Default shortcut">
+        <span class="key">Ctrl</span><span class="key">Alt</span><span class="key">L</span>
+      </div>
+      <p style="color:var(--ink-soft);margin:0">locks and unlocks. You can pick your own shortcuts.</p>
+      <button class="btn" type="button" id="unlock-btn" aria-pressed="false" style="margin-top:1.4rem">Try unlocking it</button>
+      <p class="make__state" id="make-state" aria-live="polite">Locked. It's just the lyrics.</p>
+    </div>
+
+    <div class="stage stage--make stage--round" id="make-stage" data-unlocked="false">
+      <div class="work" aria-hidden="true">
+        <div class="work__bar"><span>notes.md</span><i>&ndash; &#9633; &times;</i></div>
+        <div class="work__formula"><b>Ln 12</b> <span>UTF-8</span></div>
+        <div style="padding:.9rem 1.1rem;display:grid;gap:.55rem;align-content:start">
+          <span style="height:.6rem;width:42%;background:#d8dcf0;border-radius:4px"></span>
+          <span style="height:.6rem;width:78%;background:#e6e9f6;border-radius:4px"></span>
+          <span style="height:.6rem;width:66%;background:#e6e9f6;border-radius:4px"></span>
+          <span style="height:.6rem;width:72%;background:#e6e9f6;border-radius:4px"></span>
+          <span style="height:.6rem;width:35%;background:#e6e9f6;border-radius:4px"></span>
+        </div>
+      </div>
+      <div class="dim" aria-hidden="true"></div>
+      <div class="panel" aria-hidden="true">
+        <div class="opacity-bar"></div>
+        <div class="lyrics" data-mode="none" id="static-lyrics"><div class="track" style="--y:6px">
+          <div class="line" style="--a:.66">Tabs stacked up to the sky</div>
+          <div class="line" style="--a:.72">Cursor blinking, deadline nigh</div>
+          <div class="line is-now" style="--a:1;--s:1.22">Then the chorus finds me here</div>
+          <div class="line" style="--a:.72">Floating where my eyes are clear</div>
+          <div class="line" style="--a:.66">No more switching, no lost beat</div>
+        </div></div>
+      </div>
+      <button class="gear" type="button" id="gear" aria-label="Settings" aria-expanded="false" aria-controls="pane" tabindex="-1">
+        <svg viewBox="-12 -12 24 24" aria-hidden="true"><defs><mask id="gm"><rect x="-12" y="-12" width="24" height="24" fill="#fff"/><circle r="3" fill="#000"/></mask></defs><g mask="url(#gm)" fill="currentColor"><circle r="6.6"/><g id="teeth"></g></g></svg>
+      </button>
+      <div class="pane" id="pane" hidden role="group" aria-label="Settings">
+        <div class="cap">Now playing</div>
+        <div class="song">Then the chorus finds me</div>
+        <div class="artist">Demo lyrics</div>
+        <div class="pane__tabs" role="tablist" aria-label="Settings pages">
+          <button type="button" role="tab" aria-selected="true" data-tab="lyrics">Lyrics</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="keys">Shortcuts</button>
+          <button type="button" role="tab" aria-selected="false" data-tab="general">General</button>
+        </div>
+        <div class="pane__page" data-page="lyrics">
+          <div class="cap">Animation</div>
+          <select id="pane-style" aria-label="Lyric animation style"></select>
+          <div class="hint" id="pane-hint"></div>
+        </div>
+        <div class="pane__page" data-page="keys" hidden>
+          <div class="cap">Keyboard shortcuts</div>
+          <div class="row"><span>Start / stop</span><select aria-label="Start and stop, modifier keys"><option>Ctrl + Alt</option><option>Ctrl + Shift</option></select><select aria-label="Start and stop, key"><option>P</option></select></div>
+          <div class="row"><span>Lock / unlock</span><select aria-label="Lock and unlock, modifier keys"><option>Ctrl + Alt</option><option>Ctrl + Shift</option></select><select aria-label="Lock and unlock, key"><option>L</option></select></div>
+          <div class="hint">Change either one. If another program already uses it, you'll be told.</div>
+        </div>
+        <div class="pane__page" data-page="general" hidden>
+          <div class="cap">Window</div>
+          <button class="act" type="button">Reset window position and size</button>
+          <div class="cap" style="margin-top:.5rem">Files</div>
+          <button class="act" type="button">Open settings folder</button>
+        </div>
+        <button class="quit" type="button">Quit Top Display</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== what it does and doesn't do ===== -->
+<section class="plain" aria-labelledby="h-plain">
+  <div class="wrap">
+    <h2 id="h-plain" class="section__head" style="margin-bottom:clamp(2rem,5vw,3.5rem)">What it does with your music</h2>
+    <div class="plain__list">
+      <p class="plain__item">It reads the song from Windows, not from Spotify's servers.
+        <small>Top Display asks Windows which song the Spotify desktop app is playing. It never signs in to Spotify.</small></p>
+      <p class="plain__item">It sends the artist, title, album and length to a public lyrics database.
+        <small>That's how it finds the lyrics, from lrclib.net, with lyrics.ovh as a backup. Nothing else leaves your computer. <a href="privacy.html">Read the privacy statement</a>.</small></p>
+      <p class="plain__item">Your settings stay on your PC.
+        <small>No account, no tracking, no ads. The code is public, so you can check all of this.</small></p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== download ===== -->
+<section class="night" id="download" aria-labelledby="h-dl">
+  <div class="wrap night__grid">
+    <div>
+      <h2 id="h-dl">Download Top Display</h2>
+      <div class="night__meta">
+        <span><strong>Version <span data-release="version">0.2.0</span></strong>, released <span data-release="date">3 October 2026</span></span>
+        <span><span data-release="size">40.8 MB</span> installer for Windows</span>
+        <span>Free and open source (GPL-3.0)</span>
+      </div>
+      <a class="btn btn--light" href="https://github.com/anant-agarwal12/top-display/releases/latest" data-release-link>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 20h16"/></svg>
+        Download for Windows
+      </a>
+      <div class="night__links">
+        <a href="https://github.com/anant-agarwal12/top-display/releases">All versions and test builds</a>
+        <a href="https://github.com/anant-agarwal12/top-display">Source code</a>
+      </div>
+    </div>
+
+    <div>
+      <ol class="steps">
+        <li>
+          <div><h3>Run the installer</h3>
+          <p>It installs just for you, so it doesn't ask for administrator rights. You can choose your keyboard shortcuts and whether it starts with Windows.</p></div>
+        </li>
+        <li>
+          <div><h3>If Windows says &ldquo;Windows protected your PC&rdquo;, choose More info, then Run anyway</h3>
+          <p>The installer isn't code-signed yet, so Windows doesn't recognise the publisher. To be sure you have the right file, compare its SHA-256 below.</p></div>
+        </li>
+        <li>
+          <div><h3>Play a song in the Spotify desktop app</h3>
+          <p>Press <strong>Ctrl+Alt+P</strong> (or your own shortcut) to show the lyrics.</p></div>
+        </li>
+      </ol>
+      <div class="sha">
+        <span class="sha__label" id="sha-label">SHA-256 of the installer</span>
+        <div class="sha__row">
+          <code id="sha" aria-labelledby="sha-label" data-release="sha">b89a87a457362ddf1d0dddd3535abde62f2a3b3f5a3e93ddc50a1ea8c929c38c</code>
+          <button type="button" id="copy-sha">Copy</button>
+        </div>
+        <p style="margin:.8rem 0 0;font-size:.92rem">In PowerShell: <code style="flex:none;font-size:.85rem">Get-FileHash .\TopDisplay-Setup-<span data-release="version">0.2.0</span>.exe</code></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== questions ===== -->
+<section class="section" id="faq" aria-labelledby="h-faq">
+  <div class="wrap">
+    <h2 id="h-faq" class="section__head" style="margin-bottom:2rem">Questions</h2>
+    <div class="faq">
+      <details>
+        <summary>Does it work with the Spotify web player or my phone?</summary>
+        <div><p>No. Top Display reads the song from Windows, and only the Spotify desktop app reports it there. It doesn't see what you play on your phone or in a browser.</p></div>
+      </details>
+      <details>
+        <summary>Why does Windows warn me before installing?</summary>
+        <div><p>The installer isn't code-signed yet, and Windows warns about any file from a publisher it doesn't know. Check the SHA-256 above against your download to know it's unchanged. The source is public, and the installer is built from it.</p></div>
+      </details>
+      <details>
+        <summary>Why are there no lyrics for some songs?</summary>
+        <div><p>The lyrics come from a community database, lrclib.net. Newer, rarer or instrumental songs may not be in it yet. When that happens the window says so, and tries again later.</p></div>
+      </details>
+      <details>
+        <summary>What can I change?</summary>
+        <div><p>Unlock it with Ctrl+Alt+L and click the gear. You can pick the lyric animation, change both keyboard shortcuts, reset the window, and open the settings folder. The slider along the top sets how see-through the background is. At zero, it's just the text.</p></div>
+      </details>
+      <details>
+        <summary>Does it work over games?</summary>
+        <div><p>It stays on top of normal windows, including borderless windowed games. A game running in exclusive fullscreen can hide any overlay, this one included.</p></div>
+      </details>
+      <details>
+        <summary>Which versions of Windows does it run on?</summary>
+        <div><p>It's built for Windows 11 and should run on Windows 10, since it uses the system media session. It has only been tested on Windows 11 so far.</p></div>
+      </details>
+      <details>
+        <summary>How do I uninstall it?</summary>
+        <div><p>Open Settings, then Apps, find Top Display and uninstall. It asks whether to delete your settings and saved lyrics too.</p></div>
+      </details>
+      <details>
+        <summary>Is it connected to Spotify?</summary>
+        <div><p>No. Top Display is an independent project. It isn't made, endorsed or supported by Spotify. It's free software under the GPL-3.0 licence.</p></div>
+      </details>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div>
+      <p><strong style="color:#fff">Top Display</strong> is free software under the GPL-3.0 licence.</p>
+      <p>Not affiliated with Spotify. Lyrics come from lrclib.net and belong to their rights holders. Demo lyrics on this page were written for it.</p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="privacy.html">Privacy</a>
+      <a href="https://github.com/anant-agarwal12/top-display">Source</a>
+      <a href="https://github.com/anant-agarwal12/top-display/releases">Releases</a>
+      <a href="https://github.com/anant-agarwal12/top-display/issues">Report a problem</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="assets/demo.js" defer></script>
+<script src="assets/download.js" defer></script>
+</body>
+</html>

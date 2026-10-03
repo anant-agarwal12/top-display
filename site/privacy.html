@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy: Top Display</title>
+<meta name="description" content="What Top Display sends over the internet, and what it stores on your computer.">
+<meta name="theme-color" content="#eef1fb">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preload" href="assets/fonts/display.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="wrap top">
+  <a class="brand" href="./" aria-label="Top Display, home">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#16143a"/><rect x="10" y="8.5" width="12" height="3" rx="1.5" fill="#fff" opacity=".45"/><rect x="7" y="14" width="18" height="4.4" rx="2.2" fill="#22c55e"/><rect x="11" y="20.5" width="10" height="3" rx="1.5" fill="#fff" opacity=".45"/></svg>
+    Top Display
+  </a>
+  <nav aria-label="Main"><a href="./#faq">Questions</a><a href="https://github.com/anant-agarwal12/top-display">Source</a><a class="pill" href="./#download">Download</a></nav>
+</header>
+
+<main id="main" class="wrap doc">
+  <h1>Privacy</h1>
+  <p>Top Display has no accounts, no analytics, no crash reporting and no advertising. It sends nothing about you anywhere except what is needed to look up lyrics, described here. This website also sets no cookies and loads nothing from other companies.</p>
+
+  <h2>What leaves your computer</h2>
+  <p>To find lyrics for the song that is playing, the app sends that song's <strong>artist name, title, album name and length</strong> to:</p>
+  <ul>
+    <li><a href="https://lrclib.net">lrclib.net</a>, a free public lyrics database (the main source), and</li>
+    <li><a href="https://lyrics.ovh">lyrics.ovh</a>, used as a plain-text fallback only if lrclib is unreachable or has nothing.</li>
+  </ul>
+  <p>As with any internet request, those services can see your IP address. The requests identify the app as <code>TopDisplayLyricsOverlay</code>. They are made only while a song is playing in the Spotify desktop app. Nothing else is sent: not your listening history, not your Spotify account, not your files.</p>
+  <p>The app does not talk to Spotify's servers. It reads which song is playing from Windows' own media session on your computer.</p>
+
+  <h2>What is stored on your computer</h2>
+  <ul>
+    <li><code>%APPDATA%\TopDisplayLyricsOverlay\settings.json</code>: your settings (window position, opacity, animation style, keyboard shortcuts), and <code>overlay.log</code>, an error log.</li>
+    <li><code>%LOCALAPPDATA%\TopDisplayLyricsOverlay\cache</code>: lyrics already looked up, so they are not requested twice.</li>
+  </ul>
+  <p>Uninstalling offers to delete all of this. Nothing is stored anywhere else.</p>
+
+  <h2>This website</h2>
+  <p>The fonts are served from this site, there are no third-party scripts, and the page makes no requests to other domains. Downloading the installer happens on GitHub, which receives your IP address as any download host would.</p>
+
+  <h2>Changes</h2>
+  <p>If this ever changes, the change will be listed in the release notes and here. The source of this statement is <a href="https://github.com/anant-agarwal12/top-display/blob/main/docs/PRIVACY.md">docs/PRIVACY.md</a> in the repository.</p>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div><p><strong style="color:#fff">Top Display</strong> is free software under the GPL-3.0 licence.</p><p>Not affiliated with Spotify.</p></div>
+    <nav aria-label="Footer"><a href="./">Home</a><a href="https://github.com/anant-agarwal12/top-display">Source</a><a href="https://github.com/anant-agarwal12/top-display/issues">Report a problem</a></nav>
+  </div>
+</footer>
+</body>
+</html>

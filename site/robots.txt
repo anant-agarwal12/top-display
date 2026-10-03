@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://top-display.vercel.app/sitemap.xml

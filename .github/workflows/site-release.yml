@@ -1,0 +1,38 @@
+name: Update website release info
+
+# When a stable release is published, refresh site/release.json (version, size, SHA-256,
+# download link) and commit it to main. Vercel redeploys the site from that commit.
+# Pre-releases and drafts are ignored: the website only offers stable builds.
+on:
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    if: ${{ !github.event.release.prerelease && !github.event.release.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Write site/release.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: python3 packaging/update_site_release.py "$TAG"
+
+      - name: Commit if it changed
+        run: |
+          if git diff --quiet -- site/release.json; then
+            echo "release.json already up to date"
+            exit 0
+          fi
+          git config user.name "Anant Agarwal"
+          git config user.email "69358268+anant-agarwal12@users.noreply.github.com"
+          git add site/release.json
+          git commit -m "Website: point the download button at ${{ github.event.release.tag_name }}"
+          git push origin HEAD:main
